@@ -66,11 +66,16 @@ public sealed class FileIndex
     /// Only return files of this type, for example "pdf" (no dot). Null means every type.
     /// With a type chosen, an empty query lists all files of that type.
     /// </param>
-    public SearchResults Search(string query, int maxResults = 500, string? extension = null)
+    /// <param name="folder">
+    /// Only search this folder and the folders below it, for example "C:\Users\Ayesha\Documents".
+    /// Null means every drive. With a folder chosen, an empty query lists the files in it.
+    /// </param>
+    public SearchResults Search(string query, int maxResults = 500, string? extension = null, string? folder = null)
     {
         string[] words = query.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         string? suffix = string.IsNullOrEmpty(extension) ? null : "." + extension;
-        if (words.Length == 0 && suffix == null)
+        string? scope = string.IsNullOrEmpty(folder) ? null : Path.TrimEndingDirectorySeparator(folder);
+        if (words.Length == 0 && suffix == null && scope == null)
             return SearchResults.Empty;
 
         var stopwatch = Stopwatch.StartNew();
@@ -79,7 +84,12 @@ public sealed class FileIndex
         _lock.EnterReadLock();
         try
         {
-            FolderNode[] folders = _folders.Values.ToArray();
+            // With a folder chosen, folders outside it are dropped before any of their files are looked at.
+            // One path check per folder is much cheaper than checking every file, so this makes the search
+            // faster, not slower.
+            FolderNode[] folders = scope == null
+                ? _folders.Values.ToArray()
+                : _folders.Values.Where(f => IsInFolder(f.Path, scope)).ToArray();
 
             // Each thread collects its own list of matches (no locking needed),
             // and at the end the lists are added together.
@@ -109,16 +119,141 @@ public sealed class FileIndex
         }
 
         // Best first: lower score, then shorter name, then alphabetical.
-        List<FileEntry> best = matches
-            .OrderBy(m => m.Score)
-            .ThenBy(m => m.File.Name.Length)
-            .ThenBy(m => m.File.Name, StringComparer.OrdinalIgnoreCase)
-            .Take(maxResults)
-            .Select(m => m.File)
-            .ToList();
+        int totalMatches = matches.Count;
+        List<FileEntry> best = TakeBest(matches, maxResults, CompareFileMatches).Select(m => m.File).ToList();
 
         stopwatch.Stop();
-        return new SearchResults(best, matches.Count, stopwatch.Elapsed);
+        return new SearchResults(best, totalMatches, stopwatch.Elapsed);
+    }
+
+    private static int CompareFileMatches((FileEntry File, int Score) a, (FileEntry File, int Score) b)
+    {
+        int result = a.Score.CompareTo(b.Score);
+        if (result == 0)
+            result = a.File.Name.Length.CompareTo(b.File.Name.Length);
+        if (result == 0)
+            result = StringComparer.OrdinalIgnoreCase.Compare(a.File.Name, b.File.Name);
+        return result;
+    }
+
+    /// <summary>True if <paramref name="path"/> is <paramref name="folder"/> itself or anywhere below it.</summary>
+    private static bool IsInFolder(string path, string folder)
+    {
+        if (!path.StartsWith(folder, StringComparison.OrdinalIgnoreCase))
+            return false;
+        // "C:\Work" must not include "C:\Workshop". A drive root like "C:\" already ends with "\".
+        return path.Length == folder.Length ||
+               Path.EndsInDirectorySeparator(folder) ||
+               path[folder.Length] == Path.DirectorySeparatorChar;
+    }
+
+    /// <summary>
+    /// The best <paramref name="count"/> items, best first, without sorting the whole list.
+    /// A search for something common (like every .dll) can match millions of files, but only
+    /// the best 500 are shown. Keeping those in a small heap while going through the list takes
+    /// far less time than sorting all of them.
+    /// </summary>
+    private static List<T> TakeBest<T>(List<T> items, int count, Comparison<T> compare)
+    {
+        if (count <= 0)
+            return new List<T>();
+        if (items.Count <= count)
+        {
+            items.Sort(compare);
+            return items;
+        }
+
+        // The heap keeps the best items seen so far, with the worst of them on top,
+        // so a new item only has to beat that one to get in.
+        var worstFirst = Comparer<T>.Create((a, b) => compare(b, a));
+        var heap = new PriorityQueue<T, T>(count + 1, worstFirst);
+        foreach (T item in items)
+        {
+            if (heap.Count < count)
+                heap.Enqueue(item, item);
+            else if (compare(item, heap.Peek()) < 0)
+                heap.DequeueEnqueue(item, item);
+        }
+
+        var best = new List<T>(count);
+        while (heap.TryDequeue(out T? item, out _))
+            best.Add(item);
+        best.Reverse(); // the heap gives the worst first
+        return best;
+    }
+
+    // ------------------------------------------------------------------
+    // Finding folders (for the "Folder" picker)
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Finds folders by name, for the "Folder" picker: "invoices 2026" finds "C:\Work\Invoices-2026".
+    /// If the query looks like a path ("C:\Users\Ay" or "Users\Ayesha"), folders whose path
+    /// starts with or contains it are found instead, so a path can be typed or pasted.
+    /// </summary>
+    public List<FolderMatch> SearchFolders(string query, int maxResults = 100)
+    {
+        query = query.Trim().Replace('/', '\\');
+        if (query.Length == 0)
+            return new List<FolderMatch>();
+
+        bool byPath = query.Contains('\\') || query.Contains(':');
+        string[] words = query.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var matches = new List<(FolderMatch Folder, int Score)>();
+
+        _lock.EnterReadLock();
+        try
+        {
+            FolderNode[] folders = _folders.Values.ToArray();
+
+            Parallel.ForEach(
+                folders,
+                () => new List<(FolderMatch, int)>(),
+                (folder, _, localMatches) =>
+                {
+                    int score = byPath ? PathScore(folder.Path, query) : FolderNameScore(folder.Path, words);
+                    if (score >= 0)
+                        localMatches.Add((new FolderMatch(folder.Path, folder.Files.Count), score));
+                    return localMatches;
+                },
+                localMatches =>
+                {
+                    lock (matches) matches.AddRange(localMatches);
+                });
+        }
+        finally
+        {
+            _lock.ExitReadLock();
+        }
+
+        // Best first: lower score, then shorter path (folders nearer the top), then alphabetical.
+        return TakeBest(matches, maxResults, (a, b) =>
+            {
+                int result = a.Score.CompareTo(b.Score);
+                if (result == 0)
+                    result = a.Folder.Path.Length.CompareTo(b.Folder.Path.Length);
+                if (result == 0)
+                    result = StringComparer.OrdinalIgnoreCase.Compare(a.Folder.Path, b.Folder.Path);
+                return result;
+            })
+            .Select(m => m.Folder)
+            .ToList();
+    }
+
+    /// <summary>0 = path starts with the query, 1 = contains it, -1 = no match.</summary>
+    private static int PathScore(string path, string query)
+    {
+        int position = path.IndexOf(query, StringComparison.OrdinalIgnoreCase);
+        return position < 0 ? -1 : position == 0 ? 0 : 1;
+    }
+
+    /// <summary>Same ranking as for file names, on the folder's own name; -1 = no match.</summary>
+    private static int FolderNameScore(string path, string[] words)
+    {
+        string name = Path.GetFileName(path);
+        if (name.Length == 0)
+            name = path; // a drive root such as "C:\"
+        return NameMatches(name, words) ? Score(name, words[0]) : -1;
     }
 
     /// <summary>

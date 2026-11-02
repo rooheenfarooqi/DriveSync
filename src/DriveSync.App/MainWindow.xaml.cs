@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -33,6 +34,12 @@ public partial class MainWindow : Window
     private string _formatFilter = "";
     private bool _settingFormatText; // true while the code (not the user) changes FormatBox.Text
 
+    // The "Folder" picker: the folder chosen, folders used recently, and a number per folder search.
+    private FolderOption _selectedFolder = FolderOption.All;
+    private readonly List<FolderOption> _recentFolders = new();
+    private int _folderSearchNumber;
+    private bool _settingFolderText;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -51,7 +58,7 @@ public partial class MainWindow : Window
         _indexManager.IndexReplaced += () => Dispatcher.BeginInvoke(async () =>
         {
             await RefreshFormatsAsync();
-            if (SearchBox.Text.Trim().Length > 0 || _selectedFormat.Extension != null)
+            if (SearchBox.Text.Trim().Length > 0 || _selectedFormat.Extension != null || _selectedFolder.Path != null)
                 await RunSearchAsync();
         });
 
@@ -80,9 +87,10 @@ public partial class MainWindow : Window
         int thisSearch = ++_searchNumber;
         string query = SearchBox.Text.Trim();
         string? extension = _selectedFormat.Extension;
+        string? folder = _selectedFolder.Path;
 
-        // With a file type chosen, an empty search box lists every file of that type.
-        if (query.Length == 0 && extension == null)
+        // With a file type or folder chosen, an empty search box lists every file that fits.
+        if (query.Length == 0 && extension == null && folder == null)
         {
             ResultsList.ItemsSource = null;
             SearchTimeText.Text = "";
@@ -90,15 +98,16 @@ public partial class MainWindow : Window
         }
 
         // Search on a background thread so the window never freezes.
-        SearchResults results = await Task.Run(() => _indexManager.Index.Search(query, MaxResultsShown, extension));
+        SearchResults results = await Task.Run(() => _indexManager.Index.Search(query, MaxResultsShown, extension, folder));
         if (thisSearch != _searchNumber)
             return; // the user typed something else meanwhile
 
         ResultsList.ItemsSource = results.Items.Select(file => new ResultRow(file)).ToList();
 
         string type = extension != null ? $" {_selectedFormat.Label}" : "";
+        string where = folder != null ? $" in {_selectedFolder.Label}" : "";
         string shown = results.TotalMatches > results.Items.Count ? $" (showing the best {results.Items.Count})" : "";
-        SearchTimeText.Text = $"{results.TotalMatches:N0}{type} matches{shown} in {results.Elapsed.TotalMilliseconds:0.0} ms";
+        SearchTimeText.Text = $"{results.TotalMatches:N0}{type} matches{where}{shown} in {results.Elapsed.TotalMilliseconds:0.0} ms";
     }
 
     private void SearchBox_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -192,9 +201,16 @@ public partial class MainWindow : Window
         _selectedFormat = option;
         ShowSelectedFormatText();
         ClearFormatButton.Visibility = option.Extension != null ? Visibility.Visible : Visibility.Collapsed;
-        SearchPlaceholder.Text = option.Extension == null
-            ? "Search all files on this PC…"
-            : $"Search {option.Label} files… (leave empty to list them all)";
+        UpdateSearchPlaceholder();
+    }
+
+    /// <summary>"Search all files on this PC…", or for example "Search .pdf files in Documents…".</summary>
+    private void UpdateSearchPlaceholder()
+    {
+        string type = _selectedFormat.Extension != null ? $"{_selectedFormat.Label} files" : "all files";
+        string where = _selectedFolder.Path != null ? $"in {_selectedFolder.Label}" : "on this PC";
+        bool narrowed = _selectedFormat.Extension != null || _selectedFolder.Path != null;
+        SearchPlaceholder.Text = $"Search {type} {where}…" + (narrowed ? " (leave empty to list them all)" : "");
     }
 
     private void ShowSelectedFormatText()
@@ -244,7 +260,7 @@ public partial class MainWindow : Window
                 if (!FormatPopup.IsOpen)
                     OpenFormatList();
                 else
-                    MoveFormatHighlight(e.Key == Key.Down ? 1 : -1);
+                    MoveHighlight(FormatList, e.Key == Key.Down ? 1 : -1);
                 e.Handled = true;
                 break;
 
@@ -268,12 +284,13 @@ public partial class MainWindow : Window
         }
     }
 
-    private void MoveFormatHighlight(int step)
+    /// <summary>Moves the highlighted row of a picker list up or down, while the keyboard stays in the box.</summary>
+    private static void MoveHighlight(ListBox list, int step)
     {
-        if (FormatList.Items.Count == 0)
+        if (list.Items.Count == 0)
             return;
-        FormatList.SelectedIndex = Math.Clamp(FormatList.SelectedIndex + step, 0, FormatList.Items.Count - 1);
-        FormatList.ScrollIntoView(FormatList.SelectedItem);
+        list.SelectedIndex = Math.Clamp(list.SelectedIndex + step, 0, list.Items.Count - 1);
+        list.ScrollIntoView(list.SelectedItem);
     }
 
     private void FormatBox_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
@@ -312,6 +329,226 @@ public partial class MainWindow : Window
             OpenFormatList();
         else
             FormatBox.Focus(); // opens the list too
+    }
+
+    // ------------------------------------------------------------------
+    // Folder picker
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Shows the folders matching what was typed. Folder names are searched in the in-memory
+    /// index (on a background thread), so this is as quick as the file search and never touches the disk.
+    /// </summary>
+    private async Task UpdateFolderListAsync(string typed)
+    {
+        int thisSearch = ++_folderSearchNumber;
+        string query = typed.Trim();
+
+        List<FolderOption> shown;
+        if (query.Length == 0)
+        {
+            shown = SuggestedFolders();
+        }
+        else
+        {
+            List<FolderMatch> found = await Task.Run(() => _indexManager.Index.SearchFolders(query));
+            if (thisSearch != _folderSearchNumber)
+                return; // the user typed something else meanwhile
+            shown = found.Select(match => new FolderOption(match)).ToList();
+        }
+
+        FolderList.ItemsSource = shown;
+        FolderList.Visibility = shown.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        NoFoldersText.Visibility = shown.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
+
+        // Highlight the best match, or the current choice when showing the suggestions.
+        FolderList.SelectedItem = query.Length == 0
+            ? shown.FirstOrDefault(f => SamePath(f.Path, _selectedFolder.Path))
+            : shown.FirstOrDefault();
+        if (FolderList.SelectedItem != null)
+            FolderList.ScrollIntoView(FolderList.SelectedItem);
+    }
+
+    /// <summary>What the list shows before anything is typed: all drives, recent folders, your main folders, each drive.</summary>
+    private List<FolderOption> SuggestedFolders()
+    {
+        var suggestions = new List<FolderOption> { FolderOption.All };
+        suggestions.AddRange(_recentFolders);
+
+        string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        string[] mainFolders =
+        {
+            Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+            Path.Combine(profile, "Downloads"),
+            Environment.GetFolderPath(Environment.SpecialFolder.MyPictures),
+            Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),
+            Environment.GetFolderPath(Environment.SpecialFolder.MyMusic),
+        };
+        suggestions.AddRange(mainFolders.Where(Directory.Exists).Select(path => FolderOption.FromPath(path)));
+        suggestions.AddRange(FileScanner.GetAllDriveRoots().Select(root => FolderOption.FromPath(root)));
+
+        // The same folder can appear twice (recent and a main folder); keep the first.
+        return suggestions.DistinctBy(f => f.Path, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static bool SamePath(string? a, string? b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+
+    private void OpenFolderList()
+    {
+        _ = UpdateFolderListAsync("");
+        FolderPopup.IsOpen = true;
+    }
+
+    private void ChooseFolder(FolderOption option)
+    {
+        SetSelectedFolder(option);
+        FolderPopup.IsOpen = false;
+        SearchBox.Focus(); // step 3: type the name
+        _ = RunSearchAsync();
+    }
+
+    private void SetSelectedFolder(FolderOption option)
+    {
+        _selectedFolder = option;
+        if (option.Path != null)
+        {
+            _recentFolders.RemoveAll(f => SamePath(f.Path, option.Path));
+            _recentFolders.Insert(0, option);
+            if (_recentFolders.Count > 5)
+                _recentFolders.RemoveAt(5);
+        }
+
+        ShowSelectedFolderText();
+        ClearFolderButton.Visibility = option.Path != null ? Visibility.Visible : Visibility.Collapsed;
+        FolderBorder.ToolTip = option.Path;
+        UpdateSearchPlaceholder();
+    }
+
+    private void ShowSelectedFolderText()
+    {
+        _settingFolderText = true;
+        FolderBox.Text = _selectedFolder.Path ?? "";
+        FolderBox.CaretIndex = FolderBox.Text.Length; // show the end of a long path: the folder's own name
+        _settingFolderText = false;
+    }
+
+    private void FolderBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        FolderPlaceholder.Visibility = FolderBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+        if (_settingFolderText)
+            return;
+
+        _ = UpdateFolderListAsync(FolderBox.Text);
+        FolderPopup.IsOpen = true;
+    }
+
+    private void FolderBox_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        FolderBox.SelectAll();
+        OpenFolderList();
+    }
+
+    private void FolderBox_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (!FolderBox.IsKeyboardFocusWithin)
+        {
+            FolderBox.Focus();
+            e.Handled = true;
+        }
+        else if (!FolderPopup.IsOpen)
+        {
+            OpenFolderList();
+        }
+    }
+
+    private void FolderBox_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case Key.Down:
+            case Key.Up:
+                if (!FolderPopup.IsOpen)
+                    OpenFolderList();
+                else
+                    MoveHighlight(FolderList, e.Key == Key.Down ? 1 : -1);
+                e.Handled = true;
+                break;
+
+            case Key.Enter:
+                if (FolderPopup.IsOpen && FolderList.SelectedItem is FolderOption option)
+                    ChooseFolder(option);
+                else if (TypedFolder() is { } typed)
+                    ChooseFolder(typed);
+                else if (!FolderPopup.IsOpen)
+                    SearchBox.Focus();
+                e.Handled = true;
+                break;
+
+            case Key.Escape:
+                if (FolderPopup.IsOpen)
+                {
+                    FolderPopup.IsOpen = false;
+                    ShowSelectedFolderText();
+                    FolderBox.SelectAll();
+                    e.Handled = true;
+                }
+                break;
+        }
+    }
+
+    /// <summary>A full folder path typed or pasted into the box, if that folder exists.</summary>
+    private FolderOption? TypedFolder()
+    {
+        string text = FolderBox.Text.Trim().Trim('"');
+        return text.Length > 0 && Path.IsPathFullyQualified(text) && Directory.Exists(text)
+            ? FolderOption.FromPath(text)
+            : null;
+    }
+
+    private void FolderBox_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        FolderPopup.IsOpen = false;
+
+        // Leaving the box keeps a full path typed or pasted into it; an empty box means all drives;
+        // anything else goes back to the previous choice.
+        FolderOption chosen = FolderBox.Text.Trim().Length == 0
+            ? FolderOption.All
+            : TypedFolder() ?? _selectedFolder;
+
+        if (!SamePath(chosen.Path, _selectedFolder.Path))
+        {
+            SetSelectedFolder(chosen);
+            _ = RunSearchAsync();
+        }
+        else
+        {
+            ShowSelectedFolderText();
+        }
+    }
+
+    private void FolderList_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (ItemsControl.ContainerFromElement(FolderList, (DependencyObject)e.OriginalSource) is ListBoxItem { DataContext: FolderOption option })
+            ChooseFolder(option);
+    }
+
+    private void ClearFolderButton_Click(object sender, RoutedEventArgs e) => ChooseFolder(FolderOption.All);
+
+    private void BrowseFolderButton_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFolderDialog { Title = "Choose the folder to search in" };
+        if (_selectedFolder.Path != null)
+            dialog.InitialDirectory = _selectedFolder.Path;
+
+        if (dialog.ShowDialog(this) == true)
+            ChooseFolder(FolderOption.FromPath(dialog.FolderName));
+    }
+
+    private void SearchInFolderButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedRow is { } row)
+            ChooseFolder(FolderOption.FromPath(row.Folder));
     }
 
     // ------------------------------------------------------------------

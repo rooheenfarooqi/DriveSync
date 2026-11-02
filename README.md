@@ -38,8 +38,13 @@ while a refresh runs in the background.
   (plus well-known ones like .pdf, .docx, .png, .py), with how many files of each type you have.
   Type to filter it (`py`, `.pdf`, or a description like `image`), then click a type or press Enter.
   Keep "All file types" to search everything; the ✕ button goes back to it.
-- **Step 2, file name:** type part of a file name. Several words narrow it down: `report 2026` with type .docx
-  finds `Final-Report-2026.docx`. With a type chosen, leaving the name empty lists every file of that type.
+- **Step 2, folder (optional):** the "Folder" box limits the search to one folder and everything below it.
+  Click it for a list of your main folders (Desktop, Documents, Downloads…), recently used folders and drives;
+  type a folder name (`invoices 2026`) to find any folder on the PC; type or paste a path (`C:\Work`);
+  or press **Browse…** to pick one in the Windows folder dialog. "Search in this folder" in the preview
+  panel limits the search to the selected file's folder. Keep "All drives" (or press ✕) to search everywhere.
+- **Step 3, file name:** type part of a file name. Several words narrow it down: `report 2026` with type .docx
+  finds `Final-Report-2026.docx`. With a type or folder chosen, leaving the name empty lists every file that fits.
 - Down arrow or Enter moves into the results; Enter or double-click opens the file.
 - Selecting a file shows its keywords, a short summary, and a preview (text or image).
 - The bottom right shows how many files matched and how long the search took, in milliseconds.
@@ -63,7 +68,8 @@ DriveSync.sln
     ├── MainWindow.xaml      the layout: file type picker, search box, results list, preview panel, status bar
     ├── MainWindow.xaml.cs   what happens when you type, select, open
     ├── ResultRow.cs         one formatted row of the results list
-    └── FormatOption.cs      one formatted row of the file type list
+    ├── FormatOption.cs      one formatted row of the file type list
+    └── FolderOption.cs      one formatted row of the folder list
 ```
 
 **Why it is faster than Windows search.** Windows File Explorer search often walks the folders on disk
@@ -82,8 +88,13 @@ on every CPU core at once. Nothing touches the disk while you search, so results
 takes a folder, records its files, and pushes its sub-folders back on the stack. Junctions/shortcuts
 (reparse points) are skipped so the scan can't loop, and folders without permission are skipped quietly.
 
+**Searching in a folder stays fast.** With a folder chosen, the search first drops every folder outside it,
+with one path check per folder, before looking at any file names. So a search in one folder is quicker than a search
+of the whole PC, not slower. Finding folders for the picker uses the same in-memory index, so it never touches the disk either.
+
 **Ranking.** Matches are ordered: exact name first, then names starting with what you typed,
-then a word inside the name starting with it, then anything else. Ties go to shorter names.
+then a word inside the name starting with it, then anything else. Ties go to shorter names. Only the best 500 are shown, so they are picked with a small heap
+instead of sorting every match, which keeps broad searches (like "every .dll") quick.
 
 **Summary.** `SummaryService` counts how often each word appears (ignoring common words like "the" and "and").
 The top 8 are the keywords. Each sentence is scored by how many frequent words it contains, and the best 3

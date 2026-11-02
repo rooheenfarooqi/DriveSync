@@ -8,3 +8,8 @@ public sealed record SearchResults(IReadOnlyList<FileEntry> Items, int TotalMatc
 {
     public static readonly SearchResults Empty = new(Array.Empty<FileEntry>(), 0, TimeSpan.Zero);
 }
+
+/// <summary>A folder found by <see cref="FileIndex.SearchFolders"/>.</summary>
+/// <param name="Path">Full folder path, for example "C:\Users\Ayesha\Documents".</param>
+/// <param name="FileCount">How many files are directly inside it (not counting sub-folders).</param>
+public sealed record FolderMatch(string Path, int FileCount);
