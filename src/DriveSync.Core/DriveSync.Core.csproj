@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The "engine" of DriveSync: scanning, indexing, searching, summaries.
+       It has no user interface, so it can be tested and benchmarked on its own. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>DriveSync.Core</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Embedded SQLite database, used to save the index between runs. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
+  </ItemGroup>
+
+</Project>
