@@ -1,112 +1,87 @@
-# DriveSync, module 1: fast file name search with summary and preview
+<p align="center"><img src="src/DriveSync.App/Assets/Logo.png" width="112" alt="DriveSync logo"></p>
 
-DriveSync indexes every file name on all your drives, lets you search them instantly,
-and shows a short keyword summary and a preview of the file you select.
+# DriveSync
+
+A real-time desktop search engine for Windows. DriveSync keeps a live index of the folders you choose
+(or every drive), finds files by name as you type, and summarizes the selected file on demand, all on
+your PC. The interface follows the design in `design/drivesync.html` and `design/DriveSync-UI-Design.pdf`.
 
 ## 1. Install once
 
-1. **.NET 8 SDK**: download "SDK 8.0 x64 for Windows" from <https://dotnet.microsoft.com/download/dotnet/8.0> and install it.
-   Check it worked: open a new Command Prompt and run `dotnet --version` (it should print 8.0.something).
-2. **Visual Studio Code**: <https://code.visualstudio.com>.
-3. In VS Code, open the Extensions panel (Ctrl+Shift+X) and install **C# Dev Kit** (by Microsoft).
-   VS Code will also suggest it when you open the folder.
+1. **.NET 8 SDK**: "SDK 8.0 x64 for Windows" from <https://dotnet.microsoft.com/download/dotnet/8.0>.
+   Check with `dotnet --version` in a new Command Prompt.
+2. **Visual Studio Code** with the **C# Dev Kit** extension (or Visual Studio 2022).
 
-## 2. Open, build and run
+## 2. Build and run
 
-1. Copy the whole `DriveSync` folder to your PC, for example to `C:\Projects\DriveSync`.
-2. In VS Code: **File > Open Folder…** and choose that `DriveSync` folder (the one with `DriveSync.sln` in it).
-3. Open the terminal (**Terminal > New Terminal**) and run:
+From the `DriveSync` folder (the one with `DriveSync.sln`):
 
-   ```
-   dotnet run --project src/DriveSync.App
-   ```
+```
+dotnet run --project src/DriveSync.App
+```
 
-   The first run downloads the SQLite package from NuGet, so you need internet once.
+The first build downloads its NuGet packages, so it needs internet once. Press **F5** in VS Code to run with
+the debugger. `dotnet publish src/DriveSync.App -c Release -r win-x64 --self-contained` makes a standalone app.
 
-   Or press **F5** to run with the debugger (it uses `.vscode/launch.json`), so you can set breakpoints.
-4. Other useful commands:
-   - `dotnet build` builds everything without running it.
-   - `dotnet publish src/DriveSync.App -c Release -r win-x64 --self-contained` makes a standalone `.exe` (milestone 7).
+**First start** opens the four-step setup: Welcome → Choose folders (any folders, or All drives) → Build index →
+Ready. After that DriveSync loads its saved index at start-up instead of scanning again, and keeps it current
+with file-system watchers and a scheduled refresh.
 
-**First start:** DriveSync scans all drives. On a typical laptop this takes from under a minute to a few minutes;
-the status bar shows progress. The index is then saved, so every later start has results ready straight away
-while a refresh runs in the background.
+## 3. Using it
 
-## 3. How to use it
+| Where | What you can do |
+|---|---|
+| **Home** (Alt 1) | Quick search, recent searches, index stats with the next-refresh countdown, recently changed files, the Select → Index → Parse → Search pipeline, watched folders |
+| **Search** (Alt 2, Ctrl K or /) | Results as you type with the lookup time; Type, Folder (All drives, an indexed folder or Browse…), Modified and Sort filters; operators `ext:pdf`, `in:semester`, `type:code`; close matches when nothing matches exactly |
+| **Preview** | Summary (key sentences, keywords, word count, read time, parse time), Outline (headings, slides, sheets, or code symbols) and Details (metadata and index tokens). Explains locked files (and which app holds them), disconnected drives, images, unsupported types and the size limit |
+| **Indexed folders** (Alt 3) | Add, pause/resume, rescan and remove folders (with Undo); disconnected-drive banner; exclusions (`bin`, `*.tmp`, full paths) applied at once |
+| **Live activity** (Alt 4) | Every add, change, rename and delete as it happens, index health, a 24-hour chart |
+| **Benchmarks** (Alt 5) | Indexed lookup against a real directory walk at 2k–100k of your files, plus Windows Search when its index answers |
+| **Settings** (Alt 6, Ctrl ,) | Start with Windows, keep running in the tray, global shortcut, refresh interval, size limit, hidden files, battery saver, summary length, accent colour, transparency, reduce motion, compact rows, rebuild/clear index |
 
-- **Step 1, file type:** the "File type" box at the top left opens a list of every file type on your PC
-  (plus well-known ones like .pdf, .docx, .png, .py), with how many files of each type you have.
-  Type to filter it (`py`, `.pdf`, or a description like `image`), then click a type or press Enter.
-  Keep "All file types" to search everything; the ✕ button goes back to it.
-- **Step 2, folder (optional):** the "Folder" box limits the search to one folder and everything below it.
-  Click it for a list of your main folders (Desktop, Documents, Downloads…), recently used folders and drives;
-  type a folder name (`invoices 2026`) to find any folder on the PC; type or paste a path (`C:\Work`);
-  or press **Browse…** to pick one in the Windows folder dialog. "Search in this folder" in the preview
-  panel limits the search to the selected file's folder. Keep "All drives" (or press ✕) to search everywhere.
-- **Step 3, file name:** type part of a file name. Several words narrow it down: `report 2026` with type .docx
-  finds `Final-Report-2026.docx`. With a type or folder chosen, leaving the name empty lists every file that fits.
-- Down arrow or Enter moves into the results; Enter or double-click opens the file.
-- Selecting a file shows its keywords, a short summary, and a preview (text or image).
-- The bottom right shows how many files matched and how long the search took, in milliseconds.
+Right-click a result (or Shift F10) for Open, Show in folder, Copy path, Copy name, Summarize and Exclude this
+folder. Enter opens, Ctrl Shift C copies the path, ? lists every shortcut. Closing the window keeps DriveSync
+running in the tray; the tray icon opens a status flyout.
 
 ## 4. How it works
 
 ```
 DriveSync.sln
-├── src/DriveSync.Core      the engine (class library, no UI)
-│   ├── FileScanner.cs       walks all folders on all drives, in parallel
-│   ├── FileIndex.cs         the in-memory index, and the search itself
-│   ├── FileEntry.cs         one file: name, size, date, folder
-│   ├── FileFormats.cs       the list of file types for the "File type" picker
-│   ├── FolderNode.cs        one folder and the files directly in it
-│   ├── IndexStore.cs        saves/loads the index to SQLite (%LOCALAPPDATA%\DriveSync\index.db)
-│   ├── IndexWatcher.cs      FileSystemWatcher: hears about new, changed, deleted, renamed files
-│   ├── IndexManager.cs      ties it together: load, watch, scan, rescan every 30 minutes
-│   ├── TextExtractor.cs     reads text from .txt/.md/.csv/code, .docx, .pptx, .xlsx, .html
-│   └── SummaryService.cs    keywords, summary sentences, preview text
-└── src/DriveSync.App       the Windows window (WPF)
-    ├── MainWindow.xaml      the layout: file type picker, search box, results list, preview panel, status bar
-    ├── MainWindow.xaml.cs   what happens when you type, select, open
-    ├── ResultRow.cs         one formatted row of the results list
-    ├── FormatOption.cs      one formatted row of the file type list
-    └── FolderOption.cs      one formatted row of the folder list
+├── src/DriveSync.Core               the engine (no UI)
+│   ├── Indexing/IndexEngine.cs       in-memory index: depth-first folder ranges, token maps, bitset queries, top-K
+│   ├── Indexing/Tokenizer.cs         names → tokens (camelCase, letters/digits, separators)
+│   ├── Indexing/FileScanner.cs       parallel folder walk (one worker per core, shared stack)
+│   ├── Indexing/IndexService.cs      folders, jobs and stages, watchers, scheduled refresh, drives, activity log
+│   ├── Storage/IndexStore.cs         SQLite: index snapshot + change journal, settings, history, events
+│   ├── Parsing/                      DOCX/PPTX/XLSX (OpenXml), PDF (PdfPig), ODF, HTML, RTF, Markdown, CSV, code;
+│   │                                 extractive summarizer; Restart Manager lock detection; summary cache
+│   └── Benchmarking/BenchmarkRunner.cs
+└── src/DriveSync.App                the Windows app (WPF)
+    ├── Themes/                       Tokens.xaml (design tokens), Icons.xaml (generated), Controls.xaml (component states)
+    ├── Shell/                        Mica, tray, global hotkey, Start with Windows, toasts, dialogs, motion
+    ├── Pages/                        Home, Search + PreviewPane, Indexed folders, Live activity, Benchmarks, Settings
+    └── Dialogs/                      Add folder, confirmations, keyboard shortcuts, first-run setup
 ```
 
-**Why it is faster than Windows search.** Windows File Explorer search often walks the folders on disk
-again when you search outside indexed locations, and its index covers only some folders by default.
-DriveSync reads every folder once, keeps all names in memory, and answers a search by checking those names
-on every CPU core at once. Nothing touches the disk while you search, so results come back in milliseconds.
+**Why searching is fast.** Folders are numbered depth-first and files are stored folder by folder, so "this folder
+and everything below it" is one contiguous range. Every name and folder name is split into tokens kept in sorted
+arrays with posting lists. A query looks up each word's prefix range, combines the matches with bitset ANDs, and
+keeps only the best results with a heap. Nothing touches the disk while you search. Measured numbers are in
+`DESIGN_PLAN.md`.
 
-**Startup:**
-1. Load the saved index from SQLite, so searching works immediately.
-2. Start a `FileSystemWatcher` on every drive, so new, deleted and renamed files update the index live.
-3. Scan all drives again in the background (catching anything that changed while the app was closed),
-   swap in the new index and save it.
-4. Rescan every 30 minutes as a safety net. This is the "periodic update" from the proposal.
+**Staying current.** One FileSystemWatcher per indexed folder applies changes within a second and logs them
+to Live activity. If Windows drops notifications (buffer overflow), only that folder is rescanned. A scheduled
+refresh (every 15 minutes by default) reconciles everything. Changes are written to SQLite in batches every
+few seconds; full scans save a compact snapshot.
 
-**Scanning in parallel.** `FileScanner` keeps a shared stack of "folders still to read". One worker per CPU core
-takes a folder, records its files, and pushes its sub-folders back on the stack. Junctions/shortcuts
-(reparse points) are skipped so the scan can't loop, and folders without permission are skipped quietly.
+**Summaries.** Each word that isn't a common word is counted; each sentence is scored by its words' counts
+divided by its length^0.55, boosted when it opens a section or the document. The best sentences are shown in
+reading order. Code files get a structural overview (doc comment, types, members) instead.
 
-**Searching in a folder stays fast.** With a folder chosen, the search first drops every folder outside it,
-with one path check per folder, before looking at any file names. So a search in one folder is quicker than a search
-of the whole PC, not slower. Finding folders for the picker uses the same in-memory index, so it never touches the disk either.
+## 5. Developer tools
 
-**Ranking.** Matches are ordered: exact name first, then names starting with what you typed,
-then a word inside the name starting with it, then anything else. Ties go to shorter names. Only the best 500 are shown, so they are picked with a small heap
-instead of sorting every match, which keeps broad searches (like "every .dll") quick.
-
-**Summary.** `SummaryService` counts how often each word appears (ignoring common words like "the" and "and").
-The top 8 are the keywords. Each sentence is scored by how many frequent words it contains, and the best 3
-are shown in their original order. This is called a frequency-based extractive summary.
-Only the first 200,000 characters of a file are read, to keep it fast.
-
-## 5. Ideas for the next milestones
-
-- **Benchmarks (milestone 6):** the status bar already shows search time. Compare it with Windows search on
-  the same queries, and record the first-scan time and the index size.
-- **Parser module (milestone 4):** add PDF text (for example with the PdfPig library) and smarter summaries
-  using headings and first paragraphs.
-- **Faster first scan:** reading the NTFS Master File Table directly (as the tool "Everything" does) can index
-  a whole drive in seconds, but needs administrator rights.
-- **Settings:** choose which folders to index or exclude, saved in the same SQLite file.
+- `tools/make_icon.py` draws the logo, icon and splash screen from the design's logo.
+- `tools/make_icons_xaml.py` regenerates `Themes/Icons.xaml` from the SVG symbols in `design/drivesync.html`.
+- Set `DRIVESYNC_DATA` to a folder to run on a separate test database (it never touches your real index or the
+  Start with Windows entry). Add `DRIVESYNC_TOUR` (an output folder) and `DRIVESYNC_TOUR_FOLDER` (a folder to index)
+  to render every page, state and dialog to PNG files off-screen and exit.

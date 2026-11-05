@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- The "engine" of DriveSync: scanning, indexing, searching, summaries.
+  <!-- The "engine" of DriveSync: scanning, indexing, searching, parsing and summaries.
        It has no user interface, so it can be tested and benchmarked on its own. -->
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
@@ -10,8 +10,14 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Embedded SQLite database, used to save the index between runs. -->
+    <!-- Embedded SQLite database: the index, settings, history and activity. -->
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
+    <!-- Reads text and headings from .docx, .pptx and .xlsx files. -->
+    <PackageReference Include="DocumentFormat.OpenXml" Version="3.0.2" />
+    <!-- Reads text, bookmarks and font sizes from PDF files. -->
+    <PackageReference Include="PdfPig" Version="0.1.9" />
+    <!-- Queries Windows Search (SystemIndex) for the Benchmarks comparison. -->
+    <PackageReference Include="System.Data.OleDb" Version="8.0.1" />
   </ItemGroup>
 
 </Project>

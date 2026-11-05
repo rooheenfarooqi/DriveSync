@@ -1,0 +1,143 @@
+<UserControl x:Class="DriveSync.App.Pages.SearchPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="clr-namespace:DriveSync.App.Controls"
+             xmlns:p="clr-namespace:DriveSync.App.Pages">
+    <!-- Search & preview (design pages 9–21): query box with operators, filters, live results with timing,
+         banners and empty states, and the preview pane. -->
+    <UserControl.Resources>
+        <DataTemplate x:Key="RowTemplate" DataType="{x:Type p:ResultRow}">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="32" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <c:FileGlyph Kind="{Binding Kind}" Compact="{Binding Compact}" HorizontalAlignment="Left" VerticalAlignment="Center" />
+                <StackPanel Grid.Column="1" Margin="12,0,12,0" VerticalAlignment="Center">
+                    <p:InlineTagPanel>
+                        <TextBlock c:Highlight.Spec="{Binding NameSpec}" FontWeight="Medium" TextTrimming="CharacterEllipsis" />
+                        <Border Visibility="{Binding NewVisibility}" Background="{DynamicResource AccentSoftBrush}" CornerRadius="4" Padding="6,1" Margin="8,0,0,0" VerticalAlignment="Center">
+                            <TextBlock Text="New" FontSize="10.5" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" />
+                        </Border>
+                    </p:InlineTagPanel>
+                    <TextBlock Text="{Binding Path}" Visibility="{Binding PathVisibility}" FontFamily="{StaticResource FontMono}" FontSize="11.5"
+                               Foreground="{DynamicResource Text3Brush}" TextTrimming="CharacterEllipsis" Margin="0,1,0,0" ToolTip="{Binding Path}" />
+                </StackPanel>
+                <Grid x:Name="ModCell" Grid.Column="2" Width="108" Margin="0,0,12,0" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding Modified}" Visibility="{Binding ModifiedVisibility}" FontSize="12" Foreground="{DynamicResource Text2Brush}" TextTrimming="CharacterEllipsis" />
+                    <c:Pill Kind="err" Content="Offline" Height="18" FontSize="10.5" Visibility="{Binding OfflineVisibility}" />
+                </Grid>
+                <TextBlock x:Name="SizeCell" Grid.Column="3" Width="80" Text="{Binding Size}" FontSize="12" Foreground="{DynamicResource Text2Brush}" TextAlignment="Right" VerticalAlignment="Center" />
+            </Grid>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource AncestorType=ListBox}}" Value="narrow">
+                    <Setter TargetName="ModCell" Property="Visibility" Value="Collapsed" />
+                    <Setter TargetName="SizeCell" Property="Visibility" Value="Collapsed" />
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+        <DataTemplate x:Key="MoreTemplate" DataType="{x:Type p:MoreRow}">
+            <c:UiButton Small="True" Content="{Binding Label}" HorizontalAlignment="Center" Margin="0,12" Click="More_Click" />
+        </DataTemplate>
+        <p:ResultTemplateSelector x:Key="Selector" Row="{StaticResource RowTemplate}" More="{StaticResource MoreTemplate}" />
+    </UserControl.Resources>
+
+    <Grid x:Name="Layout">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Query box and filters -->
+        <StackPanel x:Name="Top" Margin="24,20,24,12">
+            <Border x:Name="QBox" Height="44" CornerRadius="12" BorderThickness="1" Background="{DynamicResource SearchBoxBrush}" BorderBrush="{DynamicResource StrokeBrush}">
+              <Grid>
+                <Border x:Name="QLine" Height="1" Margin="8,0" VerticalAlignment="Bottom" Background="{DynamicResource QueryBottomBrush}" />
+                <Grid Margin="14,0,8,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <c:Icon Kind="i-search" Size="20" Foreground="{DynamicResource Text2Brush}" VerticalAlignment="Center" />
+                    <TextBox x:Name="Query" Grid.Column="1" Style="{StaticResource BareInput}" FontSize="15" Margin="10,0"
+                             c:Field.Placeholder="Search by name or path. Try ext:pdf, in:cloud or type:code"
+                             AutomationProperties.Name="Search files" TextChanged="Query_TextChanged" PreviewKeyDown="Query_PreviewKeyDown"
+                             GotKeyboardFocus="Query_Focus" LostKeyboardFocus="Query_Focus" />
+                    <c:UiButton x:Name="ClearButton" Grid.Column="2" Variant="Ghost" Small="True" IconOnly="True" Icon="i-x" ToolTip="Clear"
+                                AutomationProperties.Name="Clear search" Visibility="Collapsed" Margin="0,0,8,0" Click="Clear_Click" />
+                    <c:Kbd Grid.Column="3" Content="Ctrl K" VerticalAlignment="Center" />
+                </Grid>
+              </Grid>
+            </Border>
+
+            <Grid Margin="0,12,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <WrapPanel x:Name="Filters" VerticalAlignment="Center">
+                    <c:DropDown x:Name="TypeFilter" Label="Type" Margin="0,0,8,6" />
+                    <c:DropDown x:Name="FolderFilter" Label="Folder" Margin="0,0,8,6" />
+                    <c:DropDown x:Name="ModFilter" Label="Modified" Margin="0,0,8,6" />
+                    <c:DropDown x:Name="SortFilter" Label="Sort" Margin="0,0,8,6" />
+                    <c:UiButton x:Name="ResetButton" Variant="Ghost" Small="True" Icon="i-x" Content="Reset filters" Margin="0,0,8,6" Visibility="Collapsed" Click="Reset_Click" />
+                </WrapPanel>
+                <StackPanel x:Name="Meta" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,6">
+                    <TextBlock x:Name="MetaText" FontSize="12.5" Foreground="{DynamicResource Text2Brush}" VerticalAlignment="Center" />
+                    <Border x:Name="Timing" Background="{DynamicResource AccentSoftBrush}" CornerRadius="6" Padding="8,2" Margin="8,0,0,0" ToolTip="Time spent in the index lookup" Visibility="Collapsed">
+                        <TextBlock x:Name="TimingText" FontFamily="{StaticResource FontMono}" FontSize="12" Foreground="{DynamicResource AccentBrush}" />
+                    </Border>
+                </StackPanel>
+            </Grid>
+        </StackPanel>
+
+        <!-- Fuzzy / offline banner -->
+        <ContentControl x:Name="Banner" Grid.Row="1" Margin="24,0,24,12" Focusable="False" />
+
+        <!-- Results | preview -->
+        <Grid x:Name="Body" Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="400" x:Name="PreviewColumn" />
+            </Grid.ColumnDefinitions>
+            <Border Grid.ColumnSpan="2" BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="0,1,0,0" IsHitTestVisible="False" />
+
+            <Grid x:Name="ResultsArea" Margin="8,7,8,0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <!-- Sticky column header -->
+                <Grid x:Name="Header" Margin="58,2,14,4" Visibility="Collapsed">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="132" />
+                        <ColumnDefinition Width="80" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="NAME" FontSize="11.5" FontWeight="SemiBold" Foreground="{DynamicResource Text3Brush}" />
+                    <Button Grid.Column="1" Style="{StaticResource TextButton}" HorizontalContentAlignment="Left" Click="SortModified_Click" ToolTip="Sort by date modified">
+                        <TextBlock Text="MODIFIED" FontSize="11.5" FontWeight="SemiBold" />
+                    </Button>
+                    <Button Grid.Column="2" Style="{StaticResource TextButton}" HorizontalContentAlignment="Right" Click="SortSize_Click" ToolTip="Sort by size">
+                        <TextBlock Text="SIZE" FontSize="11.5" FontWeight="SemiBold" />
+                    </Button>
+                </Grid>
+                <ListBox x:Name="Results" Grid.Row="1" Style="{StaticResource PlainList}" ItemTemplateSelector="{StaticResource Selector}"
+                         ItemContainerStyle="{StaticResource ResultItem}" AutomationProperties.Name="Search results"
+                         SelectionChanged="Results_SelectionChanged" MouseDoubleClick="Results_MouseDoubleClick"
+                         PreviewKeyDown="Results_PreviewKeyDown" PreviewMouseRightButtonDown="Results_RightButtonDown" Padding="0,0,0,16" />
+                <ContentControl x:Name="StateHost" Grid.Row="1" Focusable="False" />
+            </Grid>
+
+            <!-- Preview pane (a sliding sheet when the window is narrow) -->
+            <Border x:Name="PreviewHost" Grid.Column="1" BorderThickness="1,0,0,0" BorderBrush="{DynamicResource StrokeBrush}" Background="{DynamicResource PreviewBrush}">
+                <p:PreviewPane x:Name="Preview" />
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

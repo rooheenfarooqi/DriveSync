@@ -1,659 +1,447 @@
-using System.Diagnostics;
-using System.IO;
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
-using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using DriveSync.Core;
+using DriveSync.App.Controls;
+using DriveSync.App.Dialogs;
+using DriveSync.App.Pages;
+using DriveSync.App.Shell;
+using DriveSync.Core.Indexing;
 
 namespace DriveSync.App;
 
+/// <summary>Window width bands from the design's responsive rules.</summary>
+public enum LayoutBand { Wide, Medium, Narrow, Tiny } // ≥1180, 920–1180, 720–920, <720
+
 /// <summary>
-/// The main window. It only handles the screen: what the user types and clicks,
-/// and showing results. Indexing, searching and summaries come from DriveSync.Core.
+/// The DriveSync window: Mica surface, custom title bar with breadcrumb and live status chip, collapsible
+/// navigation with the indexing card, the six pages, dialogs and toasts. Keyboard shortcuts, tray and
+/// the global hotkey are wired here.
 /// </summary>
 public partial class MainWindow : Window
 {
-    private const int MaxResultsShown = 500;
+    private static readonly string[] PageOrder = { "home", "search", "folders", "activity", "benchmarks", "preferences" };
+    private static readonly Dictionary<string, string> PageTitles = new()
+    {
+        ["home"] = "Home", ["search"] = "Search", ["folders"] = "Indexed folders",
+        ["activity"] = "Live activity", ["benchmarks"] = "Benchmarks", ["preferences"] = "Settings",
+    };
 
-    private readonly IndexManager _indexManager = new();
+    private readonly Dictionary<string, FrameworkElement> _pages = new();
+    private readonly DispatcherTimer _tick = new() { Interval = TimeSpan.FromSeconds(1) };
+    private readonly HotkeyService _hotkey = new();
+    private TrayService? _tray;
+    private bool _quitting;
+    private bool _trayHintShown;
+    private int _unseen;
+    private bool _navCollapsed;
 
-    // Waits a moment after the last key press before searching, so we don't
-    // search for "r", "re", "rep"… while the user is still typing.
-    private readonly DispatcherTimer _searchDelay = new() { Interval = TimeSpan.FromMilliseconds(120) };
+    public ToastHost Toasts { get; }
+    public DialogHost Dialogs { get; }
+    public string CurrentPage { get; private set; } = "";
+    public LayoutBand Band { get; private set; } = LayoutBand.Wide;
 
-    // Every search gets a number; results from an older search are ignored
-    // if a newer one was started in the meantime.
-    private int _searchNumber;
-    private int _previewNumber;
-
-    // The "File type" picker: every type in the list, the one chosen, and what the list is filtered by.
-    private List<FormatOption> _formats = new() { FormatOption.All };
-    private FormatOption _selectedFormat = FormatOption.All;
-    private string _formatFilter = "";
-    private bool _settingFormatText; // true while the code (not the user) changes FormatBox.Text
-
-    // The "Folder" picker: the folder chosen, folders used recently, and a number per folder search.
-    private FolderOption _selectedFolder = FolderOption.All;
-    private readonly List<FolderOption> _recentFolders = new();
-    private int _folderSearchNumber;
-    private bool _settingFolderText;
+    /// <summary>Raised when the window crosses a responsive breakpoint.</summary>
+    public event Action<LayoutBand>? BandChanged;
 
     public MainWindow()
     {
         InitializeComponent();
+        Toasts = new ToastHost(ToastPanel);
+        Dialogs = new DialogHost(DialogLayer, DialogSurface, ShellGrid);
 
-        // Show the well-known types straight away; types found on this PC are added once the index is loaded.
-        LoadFormats(new Dictionary<string, int>());
+        IndexService s = App.Service;
+        // Like the prototype: min(1440, screen − 48) × min(880, screen − 48).
+        Rect work = SystemParameters.WorkArea;
+        Width = Math.Clamp(s.Settings.WindowWidth, MinWidth, Math.Max(MinWidth, Math.Min(1440, work.Width - 48)));
+        Height = Math.Clamp(s.Settings.WindowHeight, MinHeight, Math.Max(MinHeight, Math.Min(880, work.Height - 48)));
+        _navCollapsed = s.Settings.NavCollapsed;
 
-        _searchDelay.Tick += async (_, _) =>
+        s.StatusChanged += () => Dispatcher.BeginInvoke(UpdateChrome);
+        s.FoldersChanged += () => Dispatcher.BeginInvoke(() => { UpdateChrome(); CurrentPageObject?.OnDataChanged(); });
+        s.IndexChanged += () => Dispatcher.BeginInvoke(() => { UpdateChrome(); CurrentPageObject?.OnDataChanged(); });
+        s.ActivityAdded += ev => Dispatcher.BeginInvoke(() => OnActivity(ev));
+        s.Notify += n => Dispatcher.BeginInvoke(() => Toasts.Show(n));
+
+        _tick.Tick += (_, _) =>
         {
-            _searchDelay.Stop();
-            await RunSearchAsync();
+            UpdateChrome();
+            CurrentPageObject?.OnTick();
         };
-
-        // These events come from background threads, so hop back to the UI thread.
-        _indexManager.StatusChanged += message => Dispatcher.BeginInvoke(() => StatusText.Text = message);
-        _indexManager.IndexReplaced += () => Dispatcher.BeginInvoke(async () =>
-        {
-            await RefreshFormatsAsync();
-            if (SearchBox.Text.Trim().Length > 0 || _selectedFormat.Extension != null || _selectedFolder.Path != null)
-                await RunSearchAsync();
-        });
-
-        Loaded += async (_, _) =>
-        {
-            // The file type is asked first, so the picker gets the keyboard and opens its list.
-            FormatBox.Focus();
-            await _indexManager.StartAsync(FileScanner.GetAllDriveRoots());
-        };
-        Closed += (_, _) => _indexManager.Dispose();
+        SourceInitialized += OnSourceInitialized;
+        StateChanged += (_, _) => OnStateChanged();
+        SizeChanged += (_, _) => OnSize();
+        Closing += OnClosing;
+        PreviewKeyDown += OnPreviewKeyDown;
+        PreviewTextInput += OnPreviewTextInput;
+        ThemeManager.Changed += () => Dispatcher.BeginInvoke(UpdateChrome);
     }
 
-    // ------------------------------------------------------------------
-    // Searching
-    // ------------------------------------------------------------------
+    public FrameworkElement? FindPage(string key) => _pages.TryGetValue(key, out FrameworkElement? p) ? p : null;
 
-    private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    private IPage? CurrentPageObject => _pages.TryGetValue(CurrentPage, out FrameworkElement? p) ? p as IPage : null;
+
+    // ==================================================================
+    // Start-up
+    // ==================================================================
+
+    private void OnSourceInitialized(object? sender, EventArgs e)
     {
-        SearchPlaceholder.Visibility = SearchBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
-        _searchDelay.Stop();
-        _searchDelay.Start();
+        ThemeManager.BackdropActive = MicaHelper.Apply(this);
+        ThemeManager.SetGlass(App.Service.Settings.Glass);
+        _hotkey.Attach(this);
+        _hotkey.Pressed += OnHotkey;
+        if (App.Service.Settings.WindowMaximized) WindowState = WindowState.Maximized;
     }
 
-    private async Task RunSearchAsync()
+    /// <summary>Called once the saved index has loaded.</summary>
+    public void OnServiceReady()
     {
-        int thisSearch = ++_searchNumber;
-        string query = SearchBox.Text.Trim();
-        string? extension = _selectedFormat.Extension;
-        string? folder = _selectedFolder.Path;
+        IndexService s = App.Service;
+        if (!ScreenshotTour.Active) _tray = new TrayService();
+        if (!ScreenshotTour.Active) ApplyHotkey(s.Settings.Hotkey, announce: false);
+        if (App.SandboxFolder == null) StartupRegistration.Apply(s.Settings.StartWithWindows);
+        _tick.Start();
+        UpdateChrome();
+        CurrentPageObject?.OnDataChanged();
+        Task.Run(Core.Parsing.PreviewService.WarmUp);
+        if (!s.Settings.Onboarded && !ScreenshotTour.Active)
+            Dispatcher.BeginInvoke(() => OnboardingDialog.Show(firstRun: true), DispatcherPriority.Background);
+    }
 
-        // With a file type or folder chosen, an empty search box lists every file that fits.
-        if (query.Length == 0 && extension == null && folder == null)
+    public bool ApplyHotkey(string combo, bool announce)
+    {
+        bool ok = _hotkey.Register(combo);
+        if (!ok && combo != "off")
+            Toasts.Show(new Notice(NoticeKind.Warn, "Shortcut not available", $"{combo.Replace("+", " + ")} is already used by another app. Pick a different one in Settings."));
+        else if (announce)
+            Toasts.Show(new Notice(NoticeKind.Ok, combo == "off" ? "Shortcut turned off" : "Shortcut updated",
+                combo == "off" ? "" : $"Press {combo.Replace("+", " + ")} to open search.", Milliseconds: 2600));
+        return ok;
+    }
+
+    // ==================================================================
+    // Navigation
+    // ==================================================================
+
+    public void Navigate(string page, bool focusSearch = false)
+    {
+        if (!PageTitles.ContainsKey(page)) page = "home";
+        bool changed = CurrentPage != page;
+        if (!_pages.TryGetValue(page, out FrameworkElement? view))
         {
-            ResultsList.ItemsSource = null;
-            SearchTimeText.Text = "";
-            return;
+            view = page switch
+            {
+                "search" => new SearchPage(),
+                "folders" => new FoldersPage(),
+                "activity" => new ActivityPage(),
+                "benchmarks" => new BenchmarksPage(),
+                "preferences" => new SettingsPage(),
+                _ => new HomePage(),
+            };
+            _pages[page] = view;
+            PageHost.Children.Add(view);
+            if (view is IPage p0) p0.OnBand(Band);
         }
-
-        // Search on a background thread so the window never freezes.
-        SearchResults results = await Task.Run(() => _indexManager.Index.Search(query, MaxResultsShown, extension, folder));
-        if (thisSearch != _searchNumber)
-            return; // the user typed something else meanwhile
-
-        ResultsList.ItemsSource = results.Items.Select(file => new ResultRow(file)).ToList();
-
-        string type = extension != null ? $" {_selectedFormat.Label}" : "";
-        string where = folder != null ? $" in {_selectedFolder.Label}" : "";
-        string shown = results.TotalMatches > results.Items.Count ? $" (showing the best {results.Items.Count})" : "";
-        SearchTimeText.Text = $"{results.TotalMatches:N0}{type} matches{where}{shown} in {results.Elapsed.TotalMilliseconds:0.0} ms";
+        foreach (var (key, el) in _pages)
+            el.Visibility = key == page ? Visibility.Visible : Visibility.Collapsed;
+        foreach (NavItem item in NavItems.Children.OfType<NavItem>().Append(NavSettings))
+            item.IsCurrent = (string)item.Tag == page;
+        CrumbText.Text = PageTitles[page];
+        CurrentPage = page;
+        if (page == "activity") _unseen = 0;
+        if (changed)
+        {
+            Motion.Enter(view);
+            ((IPage)view).OnShown();
+        }
+        UpdateChrome();
+        if (focusSearch && view is SearchPage search)
+            Dispatcher.BeginInvoke(search.FocusQuery, DispatcherPriority.Input);
     }
 
-    private void SearchBox_PreviewKeyDown(object sender, KeyEventArgs e)
+    public SearchPage SearchPage
     {
-        // Down arrow or Enter jumps from the search box into the results.
-        if ((e.Key == Key.Down || e.Key == Key.Enter) && ResultsList.Items.Count > 0)
+        get
         {
-            ResultsList.SelectedIndex = 0;
-            (ResultsList.ItemContainerGenerator.ContainerFromIndex(0) as ListViewItem)?.Focus();
+            if (!_pages.ContainsKey("search")) { string current = CurrentPage; Navigate("search"); if (current.Length > 0) Navigate(current); }
+            return (SearchPage)_pages["search"];
+        }
+    }
+
+    private void Nav_Click(object sender, RoutedEventArgs e)
+    {
+        string page = (string)((FrameworkElement)sender).Tag;
+        Navigate(page, focusSearch: page == "search");
+    }
+
+    private void StatusChip_Click(object sender, RoutedEventArgs e) => Navigate("activity");
+
+    private void Burger_Click(object sender, RoutedEventArgs e)
+    {
+        _navCollapsed = !_navCollapsed;
+        App.Service.UpdateSettings(s => s.NavCollapsed = _navCollapsed);
+        ApplyNavWidth(animate: true);
+    }
+
+    private void ApplyNavWidth(bool animate)
+    {
+        bool tiny = Band == LayoutBand.Tiny;
+        bool collapsed = _navCollapsed || tiny;
+        double width = tiny ? 56 : _navCollapsed ? 60 : 236;
+        if (animate) Motion.To(NavHost, WidthProperty, width, 250);
+        else { NavHost.BeginAnimation(WidthProperty, null); NavHost.Width = width; }
+        foreach (NavItem item in NavItems.Children.OfType<NavItem>().Append(NavSettings))
+        {
+            item.Collapsed = collapsed;
+            item.Margin = new Thickness(0, 0, 0, item == NavSettings ? 0 : 2);
+        }
+        Motion.To(Mini, OpacityProperty, collapsed ? 0 : 1, 200);
+        Mini.IsHitTestVisible = !collapsed;
+        Mini.Visibility = tiny ? Visibility.Collapsed : Visibility.Visible;
+        string label = _navCollapsed ? "Expand navigation" : "Collapse navigation";
+        Burger.ToolTip = label;
+        System.Windows.Automation.AutomationProperties.SetName(Burger, label);
+    }
+
+    // ==================================================================
+    // Live status: title-bar chip, navigation card, badge, tray
+    // ==================================================================
+
+    public void UpdateChrome()
+    {
+        IndexService s = App.Service;
+        JobInfo? job = s.Job;
+        string text = s.StatusText;
+        StatusText.Text = text;
+        StatusDot.State = s.StatusDot;
+        _tray?.SetStatus(text);
+
+        if (job != null)
+        {
+            MiniDot.State = "busy";
+            MiniTitle.Text = job.Label;
+            MiniPct.Text = job.Percent + "%";
+            MiniSub.Visibility = Visibility.Collapsed;
+            MiniBar.Visibility = Visibility.Visible;
+            MiniBar.Value = job.Progress;
+        }
+        else
+        {
+            MiniPct.Text = "";
+            MiniBar.Visibility = Visibility.Collapsed;
+            MiniSub.Visibility = Visibility.Visible;
+            if (!s.IsLoaded)
+            {
+                MiniDot.State = "busy";
+                MiniTitle.Text = "Loading index";
+                MiniSub.Text = "Reading the saved index…";
+            }
+            else if (s.IsCleared)
+            {
+                MiniDot.State = "warn";
+                MiniTitle.Text = "Index is empty";
+                MiniSub.Text = "Rebuild it from Settings";
+            }
+            else
+            {
+                bool live = s.Watching && !s.BatteryPaused;
+                MiniDot.State = live ? "live" : "warn";
+                MiniTitle.Text = live ? "Up to date" : s.BatteryPaused ? "Paused on battery saver" : "Watching paused";
+                MiniSub.Text = s.LastRefresh == DateTime.MinValue ? "Not refreshed yet" : "Refreshed " + Fmt.Rel(s.LastRefresh);
+            }
+        }
+        NavActivity.Badge = _unseen == 0 || CurrentPage == "activity" ? "" : _unseen > 99 ? "99+" : _unseen.ToString();
+    }
+
+    private void OnActivity(ActivityEvent ev)
+    {
+        if (CurrentPage != "activity") _unseen++;
+        UpdateChrome();
+        foreach (FrameworkElement page in _pages.Values)
+            if (page is IActivityListener l) l.OnActivity(ev);
+    }
+
+    // ==================================================================
+    // Keyboard
+    // ==================================================================
+
+    private bool Typing => Keyboard.FocusedElement is TextBox;
+
+    private void OnPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (Dialogs.IsOpen || FluentMenu.IsOpen) return;
+        Key key = e.Key == Key.System ? e.SystemKey : e.Key;
+        ModifierKeys mods = Keyboard.Modifiers;
+
+        if (mods == ModifierKeys.Control && key == Key.K)
+        {
+            Navigate("search", focusSearch: true);
+            e.Handled = true;
+        }
+        else if (mods == ModifierKeys.Control && key == Key.OemComma)
+        {
+            Navigate("preferences");
+            e.Handled = true;
+        }
+        else if (mods == ModifierKeys.Alt && key >= Key.D1 && key <= Key.D6)
+        {
+            Navigate(PageOrder[key - Key.D1], focusSearch: key == Key.D2);
+            e.Handled = true;
+        }
+        else if (mods == (ModifierKeys.Control | ModifierKeys.Shift) && key == Key.C && CurrentPage == "search")
+        {
+            SearchPage.CopySelectedPath();
+            e.Handled = true;
+        }
+        else if (key == Key.Escape && CurrentPage == "search" && SearchPage.ClosePreviewSheet())
+        {
             e.Handled = true;
         }
     }
 
-    // ------------------------------------------------------------------
-    // File type picker
-    // ------------------------------------------------------------------
-
-    private async Task RefreshFormatsAsync()
+    private void OnPreviewTextInput(object sender, TextCompositionEventArgs e)
     {
-        Dictionary<string, int> counts = await Task.Run(_indexManager.Index.CountExtensions);
-        LoadFormats(counts);
-    }
-
-    private void LoadFormats(IReadOnlyDictionary<string, int> countsInIndex)
-    {
-        _formats = new List<FormatOption> { FormatOption.All };
-        _formats.AddRange(FileFormats.Build(countsInIndex).Select(format => new FormatOption(format)));
-
-        // Keep the chosen type, but take its new file count.
-        if (_selectedFormat.Extension != null)
-            _selectedFormat = _formats.FirstOrDefault(f => f.Extension == _selectedFormat.Extension) ?? _selectedFormat;
-
-        FilterFormats(_formatFilter);
-    }
-
-    /// <summary>
-    /// Shows the types matching what was typed: "py" lists .py first, then types containing "py"
-    /// (like .ipynb), then types whose description matches (typing "image" finds .png, .jpg…).
-    /// </summary>
-    private void FilterFormats(string typed)
-    {
-        _formatFilter = typed;
-        string text = FileFormats.Normalize(typed);
-
-        List<FormatOption> shown;
-        if (text.Length == 0)
+        if (Dialogs.IsOpen || FluentMenu.IsOpen || Typing) return;
+        if (e.Text == "/")
         {
-            shown = _formats;
-        }
-        else
-        {
-            shown = _formats
-                .Where(f => f.Extension != null)
-                .Select(f => (Format: f, Rank:
-                    f.Extension == text ? 0 :
-                    f.Extension!.StartsWith(text, StringComparison.Ordinal) ? 1 :
-                    f.Extension.Contains(text, StringComparison.Ordinal) ? 2 :
-                    f.Description.Contains(text, StringComparison.OrdinalIgnoreCase) ? 3 : -1))
-                .Where(m => m.Rank >= 0)
-                .OrderBy(m => m.Rank) // a stable sort, so types with the most files stay first within each rank
-                .Select(m => m.Format)
-                .ToList();
-        }
-
-        FormatList.ItemsSource = shown;
-        FormatList.Visibility = shown.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        NoFormatsText.Visibility = shown.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
-
-        // Highlight the best match, or the current choice when showing the whole list.
-        FormatList.SelectedItem = text.Length == 0 ? _selectedFormat : shown.FirstOrDefault();
-        if (FormatList.SelectedItem != null)
-            FormatList.ScrollIntoView(FormatList.SelectedItem);
-    }
-
-    private void OpenFormatList()
-    {
-        FilterFormats("");
-        FormatPopup.IsOpen = true;
-    }
-
-    private void ChooseFormat(FormatOption option)
-    {
-        SetSelectedFormat(option);
-        FormatPopup.IsOpen = false;
-        SearchBox.Focus(); // step 2: type the name
-        _ = RunSearchAsync();
-    }
-
-    private void SetSelectedFormat(FormatOption option)
-    {
-        _selectedFormat = option;
-        ShowSelectedFormatText();
-        ClearFormatButton.Visibility = option.Extension != null ? Visibility.Visible : Visibility.Collapsed;
-        UpdateSearchPlaceholder();
-    }
-
-    /// <summary>"Search all files on this PC…", or for example "Search .pdf files in Documents…".</summary>
-    private void UpdateSearchPlaceholder()
-    {
-        string type = _selectedFormat.Extension != null ? $"{_selectedFormat.Label} files" : "all files";
-        string where = _selectedFolder.Path != null ? $"in {_selectedFolder.Label}" : "on this PC";
-        bool narrowed = _selectedFormat.Extension != null || _selectedFolder.Path != null;
-        SearchPlaceholder.Text = $"Search {type} {where}…" + (narrowed ? " (leave empty to list them all)" : "");
-    }
-
-    private void ShowSelectedFormatText()
-    {
-        _settingFormatText = true;
-        FormatBox.Text = _selectedFormat.Extension == null ? "" : _selectedFormat.Label;
-        _settingFormatText = false;
-    }
-
-    private void FormatBox_TextChanged(object sender, TextChangedEventArgs e)
-    {
-        FormatPlaceholder.Visibility = FormatBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
-        if (_settingFormatText)
-            return;
-
-        FilterFormats(FormatBox.Text);
-        FormatPopup.IsOpen = true;
-    }
-
-    private void FormatBox_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
-    {
-        // Select the current text, so typing replaces it and searches the whole list.
-        FormatBox.SelectAll();
-        OpenFormatList();
-    }
-
-    private void FormatBox_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-    {
-        // Without this, the click would undo the "select all" from GotKeyboardFocus.
-        if (!FormatBox.IsKeyboardFocusWithin)
-        {
-            FormatBox.Focus();
+            Navigate("search", focusSearch: true);
             e.Handled = true;
         }
-        else if (!FormatPopup.IsOpen)
+        else if (e.Text == "?")
         {
-            OpenFormatList();
-        }
-    }
-
-    private void FormatBox_PreviewKeyDown(object sender, KeyEventArgs e)
-    {
-        switch (e.Key)
-        {
-            case Key.Down:
-            case Key.Up:
-                if (!FormatPopup.IsOpen)
-                    OpenFormatList();
-                else
-                    MoveHighlight(FormatList, e.Key == Key.Down ? 1 : -1);
-                e.Handled = true;
-                break;
-
-            case Key.Enter:
-                if (FormatPopup.IsOpen && FormatList.SelectedItem is FormatOption option)
-                    ChooseFormat(option);
-                else if (!FormatPopup.IsOpen)
-                    SearchBox.Focus();
-                e.Handled = true;
-                break;
-
-            case Key.Escape:
-                if (FormatPopup.IsOpen)
-                {
-                    FormatPopup.IsOpen = false;
-                    ShowSelectedFormatText();
-                    FormatBox.SelectAll();
-                    e.Handled = true;
-                }
-                break;
-        }
-    }
-
-    /// <summary>Moves the highlighted row of a picker list up or down, while the keyboard stays in the box.</summary>
-    private static void MoveHighlight(ListBox list, int step)
-    {
-        if (list.Items.Count == 0)
-            return;
-        list.SelectedIndex = Math.Clamp(list.SelectedIndex + step, 0, list.Items.Count - 1);
-        list.ScrollIntoView(list.SelectedItem);
-    }
-
-    private void FormatBox_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
-    {
-        FormatPopup.IsOpen = false;
-
-        // Leaving the box (for example with Tab) keeps a type typed in full, like "pdf";
-        // an empty box means all types, and anything else goes back to the previous choice.
-        string text = FileFormats.Normalize(FormatBox.Text);
-        FormatOption chosen = text.Length == 0
-            ? FormatOption.All
-            : _formats.FirstOrDefault(f => f.Extension == text) ?? _selectedFormat;
-
-        if (chosen != _selectedFormat)
-        {
-            SetSelectedFormat(chosen);
-            _ = RunSearchAsync();
-        }
-        else
-        {
-            ShowSelectedFormatText();
-        }
-    }
-
-    private void FormatList_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
-    {
-        if (ItemsControl.ContainerFromElement(FormatList, (DependencyObject)e.OriginalSource) is ListBoxItem { DataContext: FormatOption option })
-            ChooseFormat(option);
-    }
-
-    private void ClearFormatButton_Click(object sender, RoutedEventArgs e) => ChooseFormat(FormatOption.All);
-
-    private void ShowFormatsButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (FormatBox.IsKeyboardFocusWithin)
-            OpenFormatList();
-        else
-            FormatBox.Focus(); // opens the list too
-    }
-
-    // ------------------------------------------------------------------
-    // Folder picker
-    // ------------------------------------------------------------------
-
-    /// <summary>
-    /// Shows the folders matching what was typed. Folder names are searched in the in-memory
-    /// index (on a background thread), so this is as quick as the file search and never touches the disk.
-    /// </summary>
-    private async Task UpdateFolderListAsync(string typed)
-    {
-        int thisSearch = ++_folderSearchNumber;
-        string query = typed.Trim();
-
-        List<FolderOption> shown;
-        if (query.Length == 0)
-        {
-            shown = SuggestedFolders();
-        }
-        else
-        {
-            List<FolderMatch> found = await Task.Run(() => _indexManager.Index.SearchFolders(query));
-            if (thisSearch != _folderSearchNumber)
-                return; // the user typed something else meanwhile
-            shown = found.Select(match => new FolderOption(match)).ToList();
-        }
-
-        FolderList.ItemsSource = shown;
-        FolderList.Visibility = shown.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        NoFoldersText.Visibility = shown.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
-
-        // Highlight the best match, or the current choice when showing the suggestions.
-        FolderList.SelectedItem = query.Length == 0
-            ? shown.FirstOrDefault(f => SamePath(f.Path, _selectedFolder.Path))
-            : shown.FirstOrDefault();
-        if (FolderList.SelectedItem != null)
-            FolderList.ScrollIntoView(FolderList.SelectedItem);
-    }
-
-    /// <summary>What the list shows before anything is typed: all drives, recent folders, your main folders, each drive.</summary>
-    private List<FolderOption> SuggestedFolders()
-    {
-        var suggestions = new List<FolderOption> { FolderOption.All };
-        suggestions.AddRange(_recentFolders);
-
-        string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        string[] mainFolders =
-        {
-            Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
-            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-            Path.Combine(profile, "Downloads"),
-            Environment.GetFolderPath(Environment.SpecialFolder.MyPictures),
-            Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),
-            Environment.GetFolderPath(Environment.SpecialFolder.MyMusic),
-        };
-        suggestions.AddRange(mainFolders.Where(Directory.Exists).Select(path => FolderOption.FromPath(path)));
-        suggestions.AddRange(FileScanner.GetAllDriveRoots().Select(root => FolderOption.FromPath(root)));
-
-        // The same folder can appear twice (recent and a main folder); keep the first.
-        return suggestions.DistinctBy(f => f.Path, StringComparer.OrdinalIgnoreCase).ToList();
-    }
-
-    private static bool SamePath(string? a, string? b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
-
-    private void OpenFolderList()
-    {
-        _ = UpdateFolderListAsync("");
-        FolderPopup.IsOpen = true;
-    }
-
-    private void ChooseFolder(FolderOption option)
-    {
-        SetSelectedFolder(option);
-        FolderPopup.IsOpen = false;
-        SearchBox.Focus(); // step 3: type the name
-        _ = RunSearchAsync();
-    }
-
-    private void SetSelectedFolder(FolderOption option)
-    {
-        _selectedFolder = option;
-        if (option.Path != null)
-        {
-            _recentFolders.RemoveAll(f => SamePath(f.Path, option.Path));
-            _recentFolders.Insert(0, option);
-            if (_recentFolders.Count > 5)
-                _recentFolders.RemoveAt(5);
-        }
-
-        ShowSelectedFolderText();
-        ClearFolderButton.Visibility = option.Path != null ? Visibility.Visible : Visibility.Collapsed;
-        FolderBorder.ToolTip = option.Path;
-        UpdateSearchPlaceholder();
-    }
-
-    private void ShowSelectedFolderText()
-    {
-        _settingFolderText = true;
-        FolderBox.Text = _selectedFolder.Path ?? "";
-        FolderBox.CaretIndex = FolderBox.Text.Length; // show the end of a long path: the folder's own name
-        _settingFolderText = false;
-    }
-
-    private void FolderBox_TextChanged(object sender, TextChangedEventArgs e)
-    {
-        FolderPlaceholder.Visibility = FolderBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
-        if (_settingFolderText)
-            return;
-
-        _ = UpdateFolderListAsync(FolderBox.Text);
-        FolderPopup.IsOpen = true;
-    }
-
-    private void FolderBox_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
-    {
-        FolderBox.SelectAll();
-        OpenFolderList();
-    }
-
-    private void FolderBox_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-    {
-        if (!FolderBox.IsKeyboardFocusWithin)
-        {
-            FolderBox.Focus();
+            ShortcutsDialog.Show();
             e.Handled = true;
         }
-        else if (!FolderPopup.IsOpen)
+    }
+
+    private void OnHotkey()
+    {
+        Restore();
+        Navigate("search", focusSearch: true);
+    }
+
+    // ==================================================================
+    // Window: caption buttons, maximize, responsive bands, close to tray
+    // ==================================================================
+
+    private void Min_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+
+    private void Max_Click(object sender, RoutedEventArgs e) =>
+        WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+
+    private void Close_Click(object sender, RoutedEventArgs e) => Close();
+
+    private void OnStateChanged()
+    {
+        bool max = WindowState == WindowState.Maximized;
+        Root.Margin = max ? MicaHelper.MaximizedInset(this) : new Thickness(0);
+        MaxIcon.Kind = max ? "i-win-restore" : "i-win-max";
+        System.Windows.Automation.AutomationProperties.SetName(MaxButton, max ? "Restore" : "Maximize");
+        if (WindowState != WindowState.Minimized)
+            App.Service.UpdateSettings(s => s.WindowMaximized = max);
+    }
+
+    private void OnSize()
+    {
+        double w = ActualWidth;
+        LayoutBand band = w >= 1180 ? LayoutBand.Wide : w >= 920 ? LayoutBand.Medium : w >= 720 ? LayoutBand.Narrow : LayoutBand.Tiny;
+        DialogSurface.MaxHeight = Math.Max(200, ActualHeight - 32);
+        if (band == Band && NavHost.Width > 0 && IsLoaded) return;
+        Band = band;
+        bool tiny = band == LayoutBand.Tiny;
+        Crumb.Visibility = tiny ? Visibility.Collapsed : Visibility.Visible;
+        StatusText.Visibility = tiny ? Visibility.Collapsed : Visibility.Visible;
+        foreach (Button b in CaptionButtons.Children.OfType<Button>()) b.Width = tiny ? 40 : 46;
+        ApplyNavWidth(animate: false);
+        foreach (FrameworkElement page in _pages.Values) ((IPage)page).OnBand(band);
+        BandChanged?.Invoke(band);
+    }
+
+    /// <summary>Brings the window back from the tray or the taskbar.</summary>
+    public void Restore()
+    {
+        if (!IsVisible) Show();
+        if (WindowState == WindowState.Minimized) WindowState = App.Service.Settings.WindowMaximized ? WindowState.Maximized : WindowState.Normal;
+        Activate();
+        Topmost = true;
+        Topmost = false;
+        Focus();
+    }
+
+    private void OnClosing(object? sender, CancelEventArgs e)
+    {
+        IndexService s = App.Service;
+        if (WindowState == WindowState.Normal)
+            s.UpdateSettings(x => { x.WindowWidth = ActualWidth; x.WindowHeight = ActualHeight; });
+        if (_quitting) return;
+        if (s.Settings.KeepRunningWhenClosed)
         {
-            OpenFolderList();
-        }
-    }
-
-    private void FolderBox_PreviewKeyDown(object sender, KeyEventArgs e)
-    {
-        switch (e.Key)
-        {
-            case Key.Down:
-            case Key.Up:
-                if (!FolderPopup.IsOpen)
-                    OpenFolderList();
-                else
-                    MoveHighlight(FolderList, e.Key == Key.Down ? 1 : -1);
-                e.Handled = true;
-                break;
-
-            case Key.Enter:
-                if (FolderPopup.IsOpen && FolderList.SelectedItem is FolderOption option)
-                    ChooseFolder(option);
-                else if (TypedFolder() is { } typed)
-                    ChooseFolder(typed);
-                else if (!FolderPopup.IsOpen)
-                    SearchBox.Focus();
-                e.Handled = true;
-                break;
-
-            case Key.Escape:
-                if (FolderPopup.IsOpen)
-                {
-                    FolderPopup.IsOpen = false;
-                    ShowSelectedFolderText();
-                    FolderBox.SelectAll();
-                    e.Handled = true;
-                }
-                break;
-        }
-    }
-
-    /// <summary>A full folder path typed or pasted into the box, if that folder exists.</summary>
-    private FolderOption? TypedFolder()
-    {
-        string text = FolderBox.Text.Trim().Trim('"');
-        return text.Length > 0 && Path.IsPathFullyQualified(text) && Directory.Exists(text)
-            ? FolderOption.FromPath(text)
-            : null;
-    }
-
-    private void FolderBox_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
-    {
-        FolderPopup.IsOpen = false;
-
-        // Leaving the box keeps a full path typed or pasted into it; an empty box means all drives;
-        // anything else goes back to the previous choice.
-        FolderOption chosen = FolderBox.Text.Trim().Length == 0
-            ? FolderOption.All
-            : TypedFolder() ?? _selectedFolder;
-
-        if (!SamePath(chosen.Path, _selectedFolder.Path))
-        {
-            SetSelectedFolder(chosen);
-            _ = RunSearchAsync();
-        }
-        else
-        {
-            ShowSelectedFolderText();
-        }
-    }
-
-    private void FolderList_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
-    {
-        if (ItemsControl.ContainerFromElement(FolderList, (DependencyObject)e.OriginalSource) is ListBoxItem { DataContext: FolderOption option })
-            ChooseFolder(option);
-    }
-
-    private void ClearFolderButton_Click(object sender, RoutedEventArgs e) => ChooseFolder(FolderOption.All);
-
-    private void BrowseFolderButton_Click(object sender, RoutedEventArgs e)
-    {
-        var dialog = new Microsoft.Win32.OpenFolderDialog { Title = "Choose the folder to search in" };
-        if (_selectedFolder.Path != null)
-            dialog.InitialDirectory = _selectedFolder.Path;
-
-        if (dialog.ShowDialog(this) == true)
-            ChooseFolder(FolderOption.FromPath(dialog.FolderName));
-    }
-
-    private void SearchInFolderButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (SelectedRow is { } row)
-            ChooseFolder(FolderOption.FromPath(row.Folder));
-    }
-
-    // ------------------------------------------------------------------
-    // Summary and preview of the selected file
-    // ------------------------------------------------------------------
-
-    private ResultRow? SelectedRow => ResultsList.SelectedItem as ResultRow;
-
-    private async void ResultsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        int thisPreview = ++_previewNumber;
-        ResultRow? row = SelectedRow;
-        if (row == null)
-        {
-            PreviewPanel.Visibility = Visibility.Collapsed;
-            EmptyPreviewText.Visibility = Visibility.Visible;
+            // Hide to the tray: watching and indexing carry on.
+            e.Cancel = true;
+            Hide();
+            if (!_trayHintShown)
+            {
+                _trayHintShown = true;
+                _tray?.ShowBalloon("DriveSync is still running", "It keeps your index up to date from the system tray.");
+            }
             return;
         }
+        e.Cancel = true;
+        App.Quit();
+    }
 
-        FileSummary summary;
+    /// <summary>Called by App.Quit: really close.</summary>
+    public void Shutdown()
+    {
+        _quitting = true;
+        _tick.Stop();
+        _hotkey.Dispose();
+        _tray?.Dispose();
+        Close();
+    }
+
+    // ==================================================================
+    // Actions shared by several places (tray, Home, Activity)
+    // ==================================================================
+
+    public void ToggleWatching()
+    {
+        IndexService s = App.Service;
+        s.SetWatching(!s.Watching);
+        Toasts.Show(s.Watching
+            ? new Notice(NoticeKind.Ok, "Watching resumed", "DriveSync is tracking changes again.", Milliseconds: 3200)
+            : new Notice(NoticeKind.Warn, "Watching paused", "Search still works, but new and changed files won't show up until you resume.", Milliseconds: 3200));
+        CurrentPageObject?.OnDataChanged();
+    }
+
+    public async void RefreshNow()
+    {
+        IndexService s = App.Service;
+        Task<JobOutcome>? job = s.TryRefresh();
+        if (job == null) return;
         try
         {
-            summary = await Task.Run(() => SummaryService.Summarize(row.FullPath));
+            JobOutcome r = await job;
+            int folders = s.Folders.Count(f => f.Status == RootStatus.Watching);
+            Toasts.Show(new Notice(NoticeKind.Ok, "Index is up to date", $"{Fmt.Num(r.Files)} files checked in {folders} folder{(folders == 1 ? "" : "s")}."));
         }
-        catch (Exception ex)
-        {
-            summary = new FileSummary(row.Name, row.FullPath, "", Array.Empty<string>(), "Could not read this file: " + ex.Message, "", false);
-        }
-
-        if (thisPreview != _previewNumber)
-            return; // another file was selected meanwhile
-
-        ShowSummary(summary);
+        catch (Exception) { /* reported by the service */ }
     }
+}
 
-    private void ShowSummary(FileSummary summary)
-    {
-        EmptyPreviewText.Visibility = Visibility.Collapsed;
-        PreviewPanel.Visibility = Visibility.Visible;
+/// <summary>What the window tells each page.</summary>
+public interface IPage
+{
+    void OnShown();
+    void OnDataChanged();
+    void OnTick();
+    void OnBand(LayoutBand band);
+}
 
-        FileNameText.Text = summary.Name;
-        FileDetailsText.Text = summary.Details;
-        FilePathText.Text = summary.FullPath;
-
-        KeywordsList.ItemsSource = summary.Keywords;
-        KeywordsHeading.Visibility = summary.Keywords.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-
-        SummaryText.Text = summary.Summary;
-
-        PreviewTextBox.Text = summary.Preview;
-        PreviewTextBox.Visibility = summary.Preview.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
-        PreviewImage.Source = summary.IsImage ? LoadImage(summary.FullPath) : null;
-        PreviewHeading.Visibility = summary.Preview.Length > 0 || PreviewImage.Source != null ? Visibility.Visible : Visibility.Collapsed;
-    }
-
-    private static BitmapImage? LoadImage(string path)
-    {
-        try
-        {
-            var image = new BitmapImage();
-            image.BeginInit();
-            image.UriSource = new Uri(path);
-            image.DecodePixelWidth = 600;                   // a small copy is enough and loads fast
-            image.CacheOption = BitmapCacheOption.OnLoad;   // don't keep the file locked
-            image.EndInit();
-            return image;
-        }
-        catch (Exception)
-        {
-            return null;
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // Opening files
-    // ------------------------------------------------------------------
-
-    private void OpenButton_Click(object sender, RoutedEventArgs e) => OpenSelected();
-
-    private void ResultsList_MouseDoubleClick(object sender, MouseButtonEventArgs e) => OpenSelected();
-
-    private void ResultsList_KeyDown(object sender, KeyEventArgs e)
-    {
-        if (e.Key == Key.Enter)
-            OpenSelected();
-    }
-
-    private void OpenSelected()
-    {
-        if (SelectedRow is not { } row)
-            return;
-        try
-        {
-            // UseShellExecute opens the file with its normal program, like double-clicking it in Explorer.
-            Process.Start(new ProcessStartInfo(row.FullPath) { UseShellExecute = true });
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show(this, "Could not open the file:\n" + ex.Message, "DriveSync");
-        }
-    }
-
-    private void ShowInFolderButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (SelectedRow is { } row)
-            Process.Start("explorer.exe", $"/select,\"{row.FullPath}\"");
-    }
+/// <summary>Pages that show watcher events as they arrive.</summary>
+public interface IActivityListener
+{
+    void OnActivity(ActivityEvent ev);
 }

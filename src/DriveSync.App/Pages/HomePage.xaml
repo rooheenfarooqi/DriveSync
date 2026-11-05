@@ -1,0 +1,103 @@
+<UserControl x:Class="DriveSync.App.Pages.HomePage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="clr-namespace:DriveSync.App.Controls">
+    <!-- Home (design pages 7–8): greeting, quick search, index stats, recently changed files,
+         the Select → Index → Parse → Search pipeline and the watched folders. -->
+    <ScrollViewer x:Name="Scroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+        <StackPanel x:Name="View" Margin="32,24,32,32">
+
+            <!-- Page head -->
+            <Grid Margin="0,0,0,20">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock x:Name="DateText" Style="{StaticResource Eyebrow}" />
+                    <TextBlock x:Name="GreetingText" Style="{StaticResource H1}" Margin="0,2,0,0" />
+                    <TextBlock x:Name="SubText" Style="{StaticResource Muted}" Margin="0,4,0,0" />
+                </StackPanel>
+                <WrapPanel x:Name="HeadButtons" Grid.Column="1" VerticalAlignment="Bottom" Margin="16,0,0,0">
+                    <c:UiButton Icon="i-folder-add" Content="Add folder" Margin="0,0,8,0" Click="AddFolder_Click" />
+                    <c:UiButton x:Name="RefreshButton" Variant="Primary" Icon="i-refresh" Content="Refresh index" Click="Refresh_Click" />
+                </WrapPanel>
+            </Grid>
+
+            <!-- Hero search -->
+            <Border x:Name="Glow" CornerRadius="20" Padding="4" Margin="-4">
+                <Border x:Name="Hero" Height="56" CornerRadius="16" BorderThickness="1" Background="{DynamicResource SearchBoxBrush}"
+                        BorderBrush="{DynamicResource Stroke2Brush}" Effect="{StaticResource Shadow2}" Padding="18,0,10,0">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <c:Icon Kind="i-search" Size="20" Foreground="{DynamicResource Text2Brush}" VerticalAlignment="Center" />
+                        <TextBox x:Name="HeroBox" Grid.Column="1" Style="{StaticResource BareInput}" FontSize="16" Margin="12,0"
+                                 c:Field.Placeholder="Search file names and paths" AutomationProperties.Name="Search files"
+                                 KeyDown="HeroBox_KeyDown" GotKeyboardFocus="Hero_Focus" LostKeyboardFocus="Hero_Focus" />
+                        <c:Kbd Grid.Column="2" Content="Enter" VerticalAlignment="Center" />
+                    </Grid>
+                </Border>
+            </Border>
+
+            <WrapPanel x:Name="HistoryRow" Margin="0,12,0,0" />
+
+            <!-- Stats -->
+            <UniformGrid x:Name="Stats" Columns="4" Margin="-6,14,-6,0" />
+
+            <!-- Recently changed | pipeline + watched folders -->
+            <Grid x:Name="HomeGrid" Margin="0,16,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="1.5*" />
+                    <ColumnDefinition Width="16" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Border x:Name="RecentCard" Style="{StaticResource CardFlush}" VerticalAlignment="Top">
+                    <StackPanel>
+                        <DockPanel Margin="16,16,16,4">
+                            <c:UiButton DockPanel.Dock="Right" Variant="Ghost" Small="True" Content="View activity" Click="ViewActivity_Click" />
+                            <StackPanel Orientation="Horizontal">
+                                <c:Icon Kind="i-history" Size="16" VerticalAlignment="Center" />
+                                <TextBlock Text="Recently changed" Style="{StaticResource SectionTitle}" Margin="8,0,0,0" />
+                            </StackPanel>
+                        </DockPanel>
+                        <StackPanel x:Name="RecentList" Margin="4,4,4,8" />
+                    </StackPanel>
+                </Border>
+
+                <StackPanel x:Name="SideColumn" Grid.Column="2">
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                <c:Icon Kind="i-bolt" Size="16" VerticalAlignment="Center" />
+                                <TextBlock Text="Indexing pipeline" Style="{StaticResource SectionTitle}" Margin="8,0,0,0" />
+                            </StackPanel>
+                            <TextBlock x:Name="PipeSub" Style="{StaticResource Muted}" FontSize="12.5" />
+                            <UniformGrid x:Name="Pipeline" Columns="4" Margin="-4,10,-4,0" />
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource CardFlush}" Margin="0,16,0,0">
+                        <StackPanel>
+                            <DockPanel Margin="16,16,16,4">
+                                <c:UiButton DockPanel.Dock="Right" Variant="Ghost" Small="True" Content="Manage" Click="Manage_Click" />
+                                <StackPanel Orientation="Horizontal">
+                                    <c:Icon Kind="i-folder" Size="16" VerticalAlignment="Center" />
+                                    <TextBlock Text="Watched folders" Style="{StaticResource SectionTitle}" Margin="8,0,0,0" />
+                                </StackPanel>
+                            </DockPanel>
+                            <StackPanel x:Name="FolderList" Margin="4,4,4,8" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Grid>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

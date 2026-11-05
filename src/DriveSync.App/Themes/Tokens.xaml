@@ -1,0 +1,130 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=mscorlib">
+
+    <!-- Design tokens: the :root block of design/drivesync.html, in one place.
+         Accent-based brushes and the window surface are rewritten at run time by ThemeManager
+         (Settings → Appearance), so views always use DynamicResource for them. -->
+
+    <!-- Ground & glass -->
+    <Color x:Key="Wall1Color">#05070A</Color>
+    <Color x:Key="Wall2Color">#0A1418</Color>
+    <Color x:Key="Wall3Color">#0C1A2A</Color>
+    <Color x:Key="MicaColor">#10151B</Color>
+    <SolidColorBrush x:Key="WindowSurfaceBrush" Color="#BD10151B" />           <!-- rgb(16 21 27 / .74) -->
+    <SolidColorBrush x:Key="WindowSolidBrush" Color="#FF10151B" />
+    <SolidColorBrush x:Key="LayerBrush" Color="#09FFFFFF" />                    <!-- .035 -->
+    <SolidColorBrush x:Key="Layer2Brush" Color="#0FFFFFFF" />                   <!-- .06 -->
+    <SolidColorBrush x:Key="Layer3Brush" Color="#17FFFFFF" />                   <!-- .09 -->
+    <SolidColorBrush x:Key="StrokeBrush" Color="#13FFFFFF" />                   <!-- .075 -->
+    <SolidColorBrush x:Key="Stroke2Brush" Color="#21FFFFFF" />                  <!-- .13 -->
+    <SolidColorBrush x:Key="HairlineTopBrush" Color="#1AFFFFFF" />              <!-- .10 -->
+    <SolidColorBrush x:Key="ScrimBrush" Color="#94030609" />                    <!-- rgba(3,6,9,.58) -->
+    <SolidColorBrush x:Key="ContentBrush" Color="#06FFFFFF" />                  <!-- .025 -->
+    <SolidColorBrush x:Key="PreviewBrush" Color="#14000000" />                  <!-- rgba(0,0,0,.08) -->
+    <SolidColorBrush x:Key="SunkenBrush" Color="#38000000" />                   <!-- rgba(0,0,0,.22) inputs -->
+    <SolidColorBrush x:Key="SunkenHoverBrush" Color="#47000000" />              <!-- .28 -->
+    <SolidColorBrush x:Key="SunkenFocusBrush" Color="#57000000" />              <!-- .34 -->
+    <SolidColorBrush x:Key="SearchBoxBrush" Color="#40000000" />                <!-- .25 hero / query box -->
+    <SolidColorBrush x:Key="SegmentedBrush" Color="#33000000" />                <!-- .20 -->
+    <SolidColorBrush x:Key="InputBottomBrush" Color="#38FFFFFF" />              <!-- .22 -->
+    <SolidColorBrush x:Key="QueryBottomBrush" Color="#33FFFFFF" />              <!-- .20 -->
+    <SolidColorBrush x:Key="ButtonBottomBrush" Color="#0AFFFFFF" />             <!-- .04 -->
+    <SolidColorBrush x:Key="FooterBrush" Color="#33000000" />                   <!-- dialog footer .20 -->
+    <SolidColorBrush x:Key="SideBrush" Color="#2E000000" />                     <!-- onboarding side .18 -->
+
+    <!-- Acrylic surfaces (menus, dialogs, toasts, tooltips, flyout) -->
+    <SolidColorBrush x:Key="MenuBrush" Color="#EB22282E" />                     <!-- rgba(34,40,46,.92) -->
+    <SolidColorBrush x:Key="DialogBrush" Color="#F01E242A" />                   <!-- rgba(30,36,42,.94) -->
+    <SolidColorBrush x:Key="ToastBrush" Color="#F222282E" />                    <!-- rgba(34,40,46,.95) -->
+    <SolidColorBrush x:Key="TooltipBrush" Color="#F7282E34" />                  <!-- rgba(40,46,52,.97) -->
+    <SolidColorBrush x:Key="StickyHeadBrush" Color="#E610151B" />               <!-- rgb(mica / .9) -->
+    <SolidColorBrush x:Key="SheetBrush" Color="#F710151B" />                    <!-- narrow preview sheet .97 -->
+
+    <!-- Text -->
+    <SolidColorBrush x:Key="TextBrush" Color="#E8EEF0" />
+    <SolidColorBrush x:Key="Text2Brush" Color="#A3AFB4" />
+    <SolidColorBrush x:Key="Text3Brush" Color="#6C787D" />
+    <SolidColorBrush x:Key="TextOnAccentBrush" Color="#062421" />
+
+    <!-- Accent (Settings → Appearance) -->
+    <Color x:Key="AccentColor">#3FD0C0</Color>
+    <SolidColorBrush x:Key="AccentBrush" Color="#3FD0C0" />
+    <SolidColorBrush x:Key="AccentSoftBrush" Color="#263FD0C0" />               <!-- 15% -->
+    <SolidColorBrush x:Key="AccentLineBrush" Color="#733FD0C0" />               <!-- 45% -->
+    <SolidColorBrush x:Key="AccentFaintBrush" Color="#613FD0C0" />              <!-- 38%, chart bars -->
+    <SolidColorBrush x:Key="AccentHoverBrush" Color="#56D6C8" />                <!-- 88% accent + white -->
+    <SolidColorBrush x:Key="AccentPressedBrush" Color="#32A69A" />              <!-- 80% accent + black -->
+    <SolidColorBrush x:Key="AccentBorderBrush" Color="#79DED3" />               <!-- 70% accent + white -->
+
+    <!-- Semantic -->
+    <SolidColorBrush x:Key="OkBrush" Color="#5FD394" />
+    <SolidColorBrush x:Key="WarnBrush" Color="#F2C25C" />
+    <SolidColorBrush x:Key="ErrBrush" Color="#FF6F6F" />
+    <SolidColorBrush x:Key="InfoBrush" Color="#7AB8FF" />
+    <SolidColorBrush x:Key="OkSoftBrush" Color="#215FD394" />                   <!-- .13 -->
+    <SolidColorBrush x:Key="WarnSoftBrush" Color="#21F2C25C" />
+    <SolidColorBrush x:Key="ErrSoftBrush" Color="#21FF6F6F" />
+    <SolidColorBrush x:Key="WarnLineBrush" Color="#40F2C25C" />                 <!-- .25 -->
+    <SolidColorBrush x:Key="ErrLineBrush" Color="#47FF6F6F" />                  <!-- .28 -->
+    <SolidColorBrush x:Key="WarnTextBrush" Color="#FFE2A6" />
+    <SolidColorBrush x:Key="ErrTextBrush" Color="#FFD0D0" />
+    <SolidColorBrush x:Key="DangerBrush" Color="#29FF6F6F" />                   <!-- .16 -->
+    <SolidColorBrush x:Key="DangerHoverBrush" Color="#42FF6F6F" />              <!-- .26 -->
+    <SolidColorBrush x:Key="DangerBorderBrush" Color="#52FF6F6F" />             <!-- .32 -->
+    <SolidColorBrush x:Key="DangerTextBrush" Color="#FFD2D2" />
+    <SolidColorBrush x:Key="MenuDangerBrush" Color="#FFB4B4" />
+    <SolidColorBrush x:Key="CloseHoverBrush" Color="#C42B1C" />
+    <SolidColorBrush x:Key="SliderThumbBrush" Color="#454F55" />
+
+    <!-- File-type hues -->
+    <Color x:Key="TypeDocColor">#6EA8FF</Color>
+    <Color x:Key="TypePdfColor">#FF7A6B</Color>
+    <Color x:Key="TypeSheetColor">#5FD394</Color>
+    <Color x:Key="TypeSlidesColor">#F5A35C</Color>
+    <Color x:Key="TypeCodeColor">#B99BFF</Color>
+    <Color x:Key="TypeImageColor">#F07AC0</Color>
+    <Color x:Key="TypeTextColor">#9FB0B6</Color>
+    <Color x:Key="TypeDbColor">#58C7D6</Color>
+    <Color x:Key="TypeZipColor">#D9C06B</Color>
+
+    <!-- Type: Segoe UI Variable stands in for Sora/Figtree, Cascadia Code for JetBrains Mono -->
+    <FontFamily x:Key="FontDisplay">Segoe UI Variable Display, Segoe UI</FontFamily>
+    <FontFamily x:Key="FontBody">Segoe UI Variable Text, Segoe UI</FontFamily>
+    <FontFamily x:Key="FontMono">Cascadia Code, Cascadia Mono, Consolas</FontFamily>
+    <sys:Double x:Key="FsCap">11.5</sys:Double>
+    <sys:Double x:Key="FsSm">12.5</sys:Double>
+    <sys:Double x:Key="FsBody">13.5</sys:Double>
+    <sys:Double x:Key="FsMd">15</sys:Double>
+    <sys:Double x:Key="FsLg">19</sys:Double>
+    <sys:Double x:Key="FsXl">26</sys:Double>
+    <sys:Double x:Key="Fs2xl">34</sys:Double>
+
+    <!-- Space (4-px grid) -->
+    <sys:Double x:Key="S1">4</sys:Double>
+    <sys:Double x:Key="S2">8</sys:Double>
+    <sys:Double x:Key="S3">12</sys:Double>
+    <sys:Double x:Key="S4">16</sys:Double>
+    <sys:Double x:Key="S5">20</sys:Double>
+    <sys:Double x:Key="S6">24</sys:Double>
+    <sys:Double x:Key="S8">32</sys:Double>
+
+    <!-- Radius -->
+    <CornerRadius x:Key="RSm">4</CornerRadius>
+    <CornerRadius x:Key="RMd">8</CornerRadius>
+    <CornerRadius x:Key="RLg">12</CornerRadius>
+    <CornerRadius x:Key="RXl">16</CornerRadius>
+    <CornerRadius x:Key="RPill">999</CornerRadius>
+
+    <!-- Depth (elevation 1–4) -->
+    <DropShadowEffect x:Key="Shadow1" BlurRadius="4" ShadowDepth="1" Direction="270" Opacity="0.35" Color="Black" />
+    <DropShadowEffect x:Key="Shadow2" BlurRadius="24" ShadowDepth="8" Direction="270" Opacity="0.35" Color="Black" />
+    <DropShadowEffect x:Key="ShadowMenu" BlurRadius="40" ShadowDepth="16" Direction="270" Opacity="0.5" Color="Black" />
+    <DropShadowEffect x:Key="ShadowDialog" BlurRadius="80" ShadowDepth="32" Direction="270" Opacity="0.6" Color="Black" />
+    <DropShadowEffect x:Key="ShadowSheet" BlurRadius="40" ShadowDepth="20" Direction="180" Opacity="0.4" Color="Black" />
+
+    <!-- Motion: 180 ms state changes, 220–280 ms views and dialogs, cubic-bezier(.2,.8,.2,1) -->
+    <sys:Double x:Key="DurState">180</sys:Double>
+    <sys:Double x:Key="DurView">280</sys:Double>
+    <sys:Double x:Key="DurDialog">220</sys:Double>
+</ResourceDictionary>

@@ -1,17 +1,36 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- The Windows desktop window (WPF). All the real work happens in DriveSync.Core. -->
+  <!-- The Windows desktop app (WPF). Indexing, search and parsing live in DriveSync.Core. -->
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <!-- Only for the real system-tray icon (NotifyIcon). -->
+    <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>DriveSync</AssemblyName>
     <RootNamespace>DriveSync.App</RootNamespace>
+    <Version>0.9.0</Version>
+    <Product>DriveSync</Product>
+    <Description>Real-time desktop search engine for Windows</Description>
     <!-- Lets the project also build on a non-Windows machine (it only runs on Windows). -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <!-- The icon of DriveSync.exe in Explorer, the Start menu and the taskbar. Made by tools/make_icon.py. -->
+    <ApplicationIcon>Assets\DriveSync.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- WinForms is only used for NotifyIcon; keep its names out of every WPF file. -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\DriveSync.ico" />
+    <Resource Include="Assets\Logo.png" />
+    <Resource Include="Assets\Splash.png" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\DriveSync.Core\DriveSync.Core.csproj" />
