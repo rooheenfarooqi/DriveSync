@@ -78,7 +78,43 @@ few seconds; full scans save a compact snapshot.
 divided by its length^0.55, boosted when it opens a section or the document. The best sentences are shown in
 reading order. Code files get a structural overview (doc comment, types, members) instead.
 
-## 5. Developer tools
+## 5. Releasing (installer and auto-updates)
+
+DriveSync is packaged with [Velopack](https://velopack.io) and published on this repo's
+[Releases page](https://github.com/rooheenfarooqi/DriveSync/releases). People download
+`RooheenFarooqi.DriveSync-win-Setup.exe`, which installs per user (no administrator rights), adds Start menu and
+desktop shortcuts, and appears in Settings → Apps for uninstalling. Installed copies check for a new release every
+6 hours (Settings → About → Updates), download it in the background and install it when DriveSync restarts.
+
+**Publish a new version**
+
+1. Set `<Version>` in `src/DriveSync.App/DriveSync.App.csproj` (for example `1.0.0`; a `-beta.2` style suffix makes a pre-release
+   that only beta users get) and write `RELEASE_NOTES.md`.
+2. Commit, then tag and push: `git tag v1.0.0` and `git push origin main v1.0.0`.
+3. GitHub Actions (`.github/workflows/release.yml`) builds, packages and publishes the release. Watch it under the repo's Actions tab.
+
+**Test an installer on your PC** without publishing anything:
+`powershell -ExecutionPolicy Bypass -File tools\build-installer.ps1`. The output is in `artifacts/releases`.
+
+**Code signing.** Releases are unsigned until you add a certificate, so SmartScreen shows "Unknown publisher". To sign,
+add repository secrets (Settings → Secrets and variables → Actions). Either:
+- `SIGNING_PFX_BASE64` (the .pfx file as base64: `[Convert]::ToBase64String([IO.File]::ReadAllBytes('cert.pfx'))`)
+  and `SIGNING_PFX_PASSWORD`, or
+- `AZURE_SIGN_METADATA_JSON`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` and `AZURE_TENANT_ID` for Azure Trusted Signing.
+
+The next release is then signed automatically. Never commit a certificate (`*.pfx` is in `.gitignore`).
+
+**Safety measures in the pipeline**
+- Package versions are locked (`packages.lock.json`), and the release build fails if any package changes.
+- GitHub Actions are pinned to exact commits.
+- The workflow token can only write releases.
+- The release tag must match `<Version>` in the project file.
+- Updates download over HTTPS, and Velopack checks each package's SHA-256 before installing it.
+- Uninstalling removes the Start with Windows entry and DriveSync's index folder (`%LocalAppData%\DriveSync`); your own files are never touched.
+
+**Never change** the `PackId` in `tools/build-installer.ps1`: installed copies find their updates by it.
+
+## 6. Developer tools
 
 - `tools/make_icon.py` draws the logo, icon and splash screen from the design's logo.
 - `tools/make_icons_xaml.py` regenerates `Themes/Icons.xaml` from the SVG symbols in `design/drivesync.html`.

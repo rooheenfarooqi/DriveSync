@@ -1,0 +1,12 @@
+<Project>
+  <!--
+    Lock every NuGet package to the exact version and content hash in packages.lock.json, so a release
+    always builds from the same code that was tested. The release build restores in locked mode and
+    fails if a package changes. Update the lock files with: dotnet restore (then commit them).
+  -->
+  <PropertyGroup>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <!-- Lets the lock files include the Windows x64 packages the self-contained installer build uses. -->
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+  </PropertyGroup>
+</Project>

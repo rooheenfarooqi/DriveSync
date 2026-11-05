@@ -106,6 +106,7 @@ public partial class MainWindow : Window
         UpdateChrome();
         CurrentPageObject?.OnDataChanged();
         Task.Run(Core.Parsing.PreviewService.WarmUp);
+        Updater.Start();
         if (!s.Settings.Onboarded && !ScreenshotTour.Active)
             Dispatcher.BeginInvoke(() => OnboardingDialog.Show(firstRun: true), DispatcherPriority.Background);
     }

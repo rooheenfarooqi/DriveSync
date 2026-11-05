@@ -2,3 +2,11 @@ bin/
 obj/
 .vs/
 *.user
+
+# Release builds (tools/build-installer.ps1)
+artifacts/
+
+# Signing keys never go in the repo
+*.pfx
+*.p12
+*.snk

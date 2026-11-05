@@ -31,6 +31,8 @@ public sealed class SettingsPage : UserControl, IPage
     private readonly Dictionary<string, FrameworkElement> _sectionHeads = new();
     private readonly Dictionary<string, Button> _navButtons = new();
     private TextBox? _maxParse;
+    private TextBlock? _updateStatus;
+    private UiButton? _updateButton;
     private string _current = "general";
     private bool _rendering;
     private LayoutBand _band = LayoutBand.Wide;
@@ -40,6 +42,7 @@ public sealed class SettingsPage : UserControl, IPage
 
     public SettingsPage()
     {
+        Updater.Changed += ShowUpdateState;
         var root = new Grid { Margin = new Thickness(32, 24, 32, 0) };
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition());
@@ -285,15 +288,30 @@ public sealed class SettingsPage : UserControl, IPage
         var name = Build.Text("DriveSync", size: 16, weight: FontWeights.SemiBold);
         name.SetResourceReference(TextBlock.FontFamilyProperty, "FontDisplay");
         aboutText.Children.Add(name);
-        string version = typeof(App).Assembly.GetName().Version is Version v ? $"{v.Major}.{v.Minor}" : "0.9";
-        aboutText.Children.Add(Build.Text($"Version {version} · Real-time desktop search engine for Windows", size: 12, brush: "Text3Brush"));
+        aboutText.Children.Add(Build.Text($"Version {Updater.Version} · Real-time desktop search engine for Windows", size: 12, brush: "Text3Brush"));
         var credits = Build.Text("Final Year Project, BS Computer Science, Institute of Space Technology, Islamabad.\nAyesha Riaz and Rooheen Ahmad Farooqi · Supervised by Mr. Faran Mehmood",
             size: 12, brush: "Text3Brush", margin: new Thickness(0, 6, 0, 0));
         credits.TextWrapping = TextWrapping.Wrap;
         aboutText.Children.Add(credits);
         about.Children.Add(aboutText);
+        var updates = new StackPanel { Orientation = Orientation.Horizontal };
+        _updateStatus = Build.Text("", size: 12, brush: "Text3Brush", margin: new Thickness(0, 0, 12, 0));
+        _updateStatus.VerticalAlignment = VerticalAlignment.Center;
+        _updateStatus.TextWrapping = TextWrapping.Wrap;
+        _updateStatus.MaxWidth = 260;
+        updates.Children.Add(_updateStatus);
+        _updateButton = Build.Button("Check for updates", onClick: () =>
+        {
+            if (Updater.State == UpdateState.Ready) Updater.RestartNow();
+            else _ = Updater.CheckAsync(manual: true);
+        });
+        updates.Children.Add(_updateButton);
+        ShowUpdateState();
         Section("about", "About",
             RowRaw(about),
+            Row("i-refresh", "Updates", "New versions come from DriveSync's GitHub Releases page.", updates),
+            Row("i-bolt", "Download updates automatically", "Checks every 6 hours and installs the new version the next time DriveSync restarts.",
+                Toggle("Download updates automatically", Set.AutoUpdate, on => S.UpdateSettings(s => s.AutoUpdate = on))),
             Row("i-rocket", "First-run setup", "Walk through choosing folders and building the index again.",
                 Build.Button("Run setup", onClick: () => OnboardingDialog.Show(firstRun: false))),
             Row("i-keyboard", "Keyboard shortcuts", "Every shortcut DriveSync understands.",
@@ -308,6 +326,15 @@ public sealed class SettingsPage : UserControl, IPage
     {
         if (_clearIndexButton != null) _clearIndexButton.IsEnabled = !S.IsCleared;
         if (_clearHistoryButton != null) _clearHistoryButton.IsEnabled = S.History.Count > 0;
+    }
+
+    private void ShowUpdateState()
+    {
+        if (_updateStatus == null || _updateButton == null) return;
+        _updateStatus.Text = Updater.Detail;
+        _updateButton.Content = Updater.State == UpdateState.Ready ? "Restart to update" : "Check for updates";
+        _updateButton.Variant = Updater.State == UpdateState.Ready ? ButtonVariant.Primary : ButtonVariant.Default;
+        _updateButton.IsEnabled = Updater.State is not (UpdateState.Unavailable or UpdateState.Checking or UpdateState.Downloading);
     }
 
     private static string RefreshLabel(int minutes) => minutes switch { 60 => "hour", 240 => "4 hours", _ => $"{minutes} minutes" };

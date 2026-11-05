@@ -11,13 +11,21 @@
     <Nullable>enable</Nullable>
     <AssemblyName>DriveSync</AssemblyName>
     <RootNamespace>DriveSync.App</RootNamespace>
-    <Version>0.9.0</Version>
+    <!-- The release version. A release is published by pushing the tag v<Version> (see .github/workflows/release.yml). -->
+    <Version>0.9.0-beta.1</Version>
     <Product>DriveSync</Product>
+    <Authors>Rooheen Farooqi</Authors>
+    <Company>Rooheen Farooqi</Company>
+    <Copyright>Copyright © 2026 Ayesha Riaz and Rooheen Ahmad Farooqi</Copyright>
+    <!-- Program.Main runs Velopack's install/update hooks before WPF starts. -->
+    <StartupObject>DriveSync.App.Program</StartupObject>
     <Description>Real-time desktop search engine for Windows</Description>
     <!-- Lets the project also build on a non-Windows machine (it only runs on Windows). -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <!-- The icon of DriveSync.exe in Explorer, the Start menu and the taskbar. Made by tools/make_icon.py. -->
     <ApplicationIcon>Assets\DriveSync.ico</ApplicationIcon>
+    <!-- The installer build is precompiled, so DriveSync starts and opens previews without JIT warm-up. -->
+    <PublishReadyToRun>true</PublishReadyToRun>
   </PropertyGroup>
 
   <ItemGroup>
@@ -30,6 +38,11 @@
     <Resource Include="Assets\DriveSync.ico" />
     <Resource Include="Assets\Logo.png" />
     <Resource Include="Assets\Splash.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Installer, uninstaller and auto-updates from GitHub Releases. Keep in step with the vpk tool version. -->
+    <PackageReference Include="Velopack" Version="1.2.161" />
   </ItemGroup>
 
   <ItemGroup>

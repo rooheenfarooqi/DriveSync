@@ -10,6 +10,7 @@ public sealed class AppSettings
     public bool StartWithWindows { get; set; } = true;
     public bool KeepRunningWhenClosed { get; set; } = true;
     public string Hotkey { get; set; } = "Alt+Space";   // "Alt+Space", "Ctrl+Shift+F", "Win+Alt+S" or "off"
+    public bool AutoUpdate { get; set; } = true;        // check GitHub Releases and download new versions in the background
 
     // Indexing
     public bool DetectChangesInstantly { get; set; } = true;

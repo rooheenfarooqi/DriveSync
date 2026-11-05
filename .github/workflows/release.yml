@@ -1,0 +1,96 @@
+# Publishes a DriveSync release: push a tag that matches <Version> in src/DriveSync.App/DriveSync.App.csproj,
+# for example  git tag v0.9.0-beta.1  then  git push origin v0.9.0-beta.1
+# GitHub builds the installer with tools/build-installer.ps1 and uploads it to the repo's Releases page,
+# where installed copies of DriveSync find their updates.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+# Nothing is allowed by default; the job below asks only for what it needs.
+permissions: {}
+
+# Two releases never upload at the same time.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write   # create the release and upload the installer
+    env:
+      DOTNET_NOLOGO: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+    steps:
+      # Actions are pinned to exact commits, so a changed tag upstream can't change what runs here.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Check the tag matches the app version
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          [xml]$xml = Get-Content src/DriveSync.App/DriveSync.App.csproj
+          $version = @($xml.Project.PropertyGroup | ForEach-Object { $_.Version } | Where-Object { $_ })[0]
+          if ("v$version" -ne $env:TAG) { throw "Tag $env:TAG doesn't match <Version>$version</Version> in DriveSync.App.csproj." }
+          "VERSION=$version" >> $env:GITHUB_ENV
+
+      # Optional code signing. Add the secrets in Settings → Secrets and variables → Actions:
+      #   SIGNING_PFX_BASE64 and SIGNING_PFX_PASSWORD  for a .pfx certificate, or
+      #   AZURE_SIGN_METADATA_JSON, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET and AZURE_TENANT_ID  for Azure Trusted Signing.
+      # Without them the release is built unsigned.
+      - name: Prepare signing
+        shell: pwsh
+        env:
+          PFX_BASE64: ${{ secrets.SIGNING_PFX_BASE64 }}
+          AZURE_METADATA: ${{ secrets.AZURE_SIGN_METADATA_JSON }}
+        run: |
+          if ($env:PFX_BASE64) {
+            $pfx = Join-Path $env:RUNNER_TEMP 'signing.pfx'
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX_BASE64))
+            "DRIVESYNC_SIGN_PFX=$pfx" >> $env:GITHUB_ENV
+          } elseif ($env:AZURE_METADATA) {
+            $file = Join-Path $env:RUNNER_TEMP 'azure-signing.json'
+            Set-Content $file $env:AZURE_METADATA -Encoding utf8
+            "DRIVESYNC_AZURE_SIGN_METADATA=$file" >> $env:GITHUB_ENV
+          } else {
+            Write-Host 'No signing secrets set: building an unsigned release.'
+          }
+
+      - name: Build the installer
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRIVESYNC_SIGN_PFX_PASSWORD: ${{ secrets.SIGNING_PFX_PASSWORD }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        run: ./tools/build-installer.ps1 -DeltaFromGitHub
+
+      - name: Publish the GitHub release
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          $upload = @('vpk', 'upload', 'github', '--outputDir', 'artifacts/releases', '--repoUrl', $env:REPO_URL,
+            '--token', $env:GITHUB_TOKEN, '--publish', '--tag', $env:TAG, '--releaseName', "DriveSync $env:VERSION")
+          if ($env:VERSION.Contains('-')) { $upload += '--pre' }
+          dotnet @upload
+          if ($LASTEXITCODE -ne 0) { throw "Upload failed (exit code $LASTEXITCODE)." }
+
+      - name: Remove the signing certificate
+        if: always()
+        shell: pwsh
+        run: Remove-Item (Join-Path $env:RUNNER_TEMP 'signing.pfx'), (Join-Path $env:RUNNER_TEMP 'azure-signing.json') -ErrorAction SilentlyContinue

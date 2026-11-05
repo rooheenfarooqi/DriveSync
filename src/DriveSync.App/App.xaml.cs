@@ -88,6 +88,7 @@ public partial class App : Application
     /// <summary>Saves everything and exits (tray "Quit", or closing with "Keep running" off).</summary>
     public static void Quit()
     {
+        Updater.ApplyOnExit();
         Host?.Shutdown();
         Service?.Dispose();
         Current.Shutdown();
